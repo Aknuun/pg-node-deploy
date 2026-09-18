@@ -157,6 +157,12 @@ log "Step 1/5 - apt update"
 apt-get update -y || warn "apt-get update reported errors; continuing anyway."
 ok "Package lists updated."
 
+log "Installing nload (network traffic monitor)..."
+if ! command -v nload >/dev/null 2>&1; then
+    apt-get install -y nload >/dev/null 2>&1 || warn "Could not install nload; continuing anyway."
+fi
+command -v nload >/dev/null 2>&1 && ok "nload is installed." || warn "nload is not available."
+
 # --------------------------------------------------------------------------
 # Step 2 - resolv.conf
 # --------------------------------------------------------------------------
