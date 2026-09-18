@@ -42,7 +42,7 @@ jobs:
           username: ${{ inputs.user }}
           port: ${{ inputs.port }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "install.sh"
+          source: "bootstrap.sh"
           target: "/tmp/pg-node-deploy"
           overwrite: true
 
@@ -57,4 +57,4 @@ jobs:
           script_stop: true
           script: |
             set -e
-            sudo bash /tmp/pg-node-deploy/install.sh
+            sudo bash /tmp/pg-node-deploy/bootstrap.sh
