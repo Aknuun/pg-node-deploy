@@ -22,7 +22,7 @@ set -Eeuo pipefail
 DEFAULT_INSTANCE="pg-node"
 DEFAULT_PORT="62050"
 DEFAULT_API_PORT="62051"
-XRAY_ZIP_URL="https://github.com/Aknuun/autonode-bot/releases/download/1.0/xray-amd64.zip"
+XRAY_ZIP_URL="https://github.com/Aknuun/pg-node-deploy/releases/download/xray-26.5.3/xray-amd64.zip"
 INSTALLER_URL="https://github.com/PasarGuard/scripts/raw/main/pg-node.sh"
 REPO_RAW="https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main"
 REGISTER_SCRIPT_NAME="register-node.sh"
