@@ -23,49 +23,22 @@
 
 ## تنظیم اطلاعات پنل (یک‌بار)
 
-برای اینکه نود بعد از نصب خودکار در پنل ثبت شود، اطلاعات پنل را یک‌بار در یکی از این سه جا بگذار.
+برای اینکه نود بعد از نصب خودکار در پنل ثبت شود، اطلاعات پنل را یک‌بار در یکی از این دو جا بگذار.
 
-### روش ۱ (پیشنهادی) — ریپوی خصوصی گیت‌هاب + توکن
+> دستورها با `wget` نوشته شده‌اند. اگر `curl` داری، هرجا `$(wget -qO- URL)` بود بگذار `$(curl -fsSL URL)`.
 
-> ⚠️ **فورک خصوصی از ریپوی عمومی ممکن نیست.** طبق قوانین گیت‌هاب، visibility یک فورک همیشه همان visibility ریپوی اصلی است؛ از یک ریپوی پابلیک فقط فورک پابلیک ساخته می‌شود. پس به‌جای فورک، یک **ریپوی خصوصی جدید** بساز.
-
-**۱) در گیت‌هاب یک ریپوی خصوصی بساز** (مثلاً `pg-node-config`) و در آن فایل `panel.conf` را با این محتوا ایجاد کن:
-
-```ini
-PANEL_URL=https://panel.example.com
-PANEL_USERNAME=admin
-PANEL_PASSWORD=change-me
-```
-
-**۲) یک توکن بساز** از مسیر:
-`Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token`
-- Repository access: فقط همان ریپوی `pg-node-config`
-- Permissions → **Contents: Read-only**
-- Expiration: کوتاه (مثلاً ۷ روز)
-
-**۳) روی سرور، کانفیگ را دانلود کن و نصب را اجرا کن:**
+### روش ۱ — متغیر محیطی (سریع، برای یک اجرا)
 
 ```bash
-# این دو مقدار را عوض کن
-REPO="USERNAME/pg-node-config"
-TOKEN="github_pat_xxxxxxxxxxxx"
-
-sudo install -d -m 700 /etc/pg-node-deploy
-sudo curl -fsSL \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Accept: application/vnd.github.raw" \
-  "https://api.github.com/repos/${REPO}/contents/panel.conf" \
-  -o /etc/pg-node-deploy/panel.conf
-sudo chmod 600 /etc/pg-node-deploy/panel.conf
-
-sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
+sudo PANEL_URL="https://panel.example.com" \
+     PANEL_USERNAME="admin" \
+     PANEL_PASSWORD='change-me' \
+     bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
 ```
 
-بعد از دانلود می‌توانی توکن را از گیت‌هاب **Revoke** کنی. اگر می‌خواهی برای سرورهای بعدی هم راحت باشد، توکن را روی سرور نگه دار (مثلاً `/etc/pg-node-deploy/.token` با `chmod 600`).
+### روش ۲ — فایل کانفیگ روی سرور (دائمی)
 
-### روش ۲ — فایل کانفیگ مستقیم روی سرور
-
-بدون هیچ گیت‌هاب و توکنی:
+یک‌بار فایل را بساز:
 
 ```bash
 sudo install -d -m 700 /etc/pg-node-deploy
@@ -76,32 +49,17 @@ PANEL_PASSWORD=change-me
 EOF
 ```
 
-### روش ۳ — متغیر محیطی (برای یک اجرا)
-
-```bash
-sudo PANEL_URL="https://panel.example.com" \
-     PANEL_USERNAME="admin" \
-     PANEL_PASSWORD='change-me' \
-     bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
-```
-
----
-
-## نصب + افزودن خودکار
-
-بعد از تنظیم اطلاعات پنل (هر یک از سه روش بالا):
-
-با **curl**:
-
-```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
-```
-
-با **wget**:
+بعد نصب کن:
 
 ```bash
 sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
 ```
+
+از این به بعد روی همان سرور فقط همین خط آخر لازم است.
+
+---
+
+## نکته‌های نصب
 
 اگر روی سرور نصب قبلی وجود داشته باشد، همین‌جا می‌پرسد (فقط وقتی ترمینال تعاملی باشد):
 
@@ -110,63 +68,30 @@ An existing 'pg-node' install was found at /opt/pg-node.
 Press Enter to (re)install on it, or type a new instance name:
 ```
 
-در اجرای غیرتعاملی (بدون ترمینال) به‌صورت پیش‌فرض روی `pg-node` نصب می‌کند؛ برای instance دلخواه `NODE_INSTANCE` را ست کن.
+- `Enter` → همان instance با همان پورت/API Key/گواهی قبلی بازنویسی می‌شود (ثبت قبلی در پنل معتبر می‌ماند).
+- نام جدید → instance جدا ساخته می‌شود و نام نود در پنل `<IP>-<نام>` می‌شود.
+- در اجرای غیرتعاملی (بدون ترمینال) به‌صورت پیش‌فرض روی `pg-node` نصب می‌کند؛ برای instance دلخواه `NODE_INSTANCE` را ست کن.
 
-> در نصب مجدد (Enter روی instance موجود)، سرویس فعلی متوقف می‌شود و همان پورت‌ها، API Key و Certificate حفظ می‌شوند؛ پس ثبت قبلی نود در پنل دست‌نخورده می‌ماند.
-
-اگر هیچ اطلاعات پنلی ندهی، نصب انجام می‌شود ولی مرحله افزودن به پنل رد می‌شود. بعداً این‌طور ثبت کن:
+اگر بدون اطلاعات پنل نصب کنی، مرحله افزودن به پنل رد می‌شود و بعداً می‌توانی این‌طور ثبت کنی:
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/register-node.sh)"
+sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/register-node.sh)"
 # یا برای instance خاص:
-sudo NODE_INSTANCE=fin3 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/register-node.sh)"
+sudo NODE_INSTANCE=fin3 bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/register-node.sh)"
 ```
 
 ---
 
-## راهنمای دوستان (کپی برداری)
+## راهنمای دوستان
 
-این متن را برای دوستت بفرست. فقط کافیست طبق مراحل، اطلاعات پنل خودش را در یک ریپوی خصوصی بگذارد و خط آخر را اجرا کند.
-
-**الف) یک‌بار در گیت‌هاب:**
-
-1. یک ریپوی **خصوصی** بساز، مثلاً `pg-node-config`.
-2. فایل `panel.conf` را با اطلاعات پنل خودت بساز:
-
-```ini
-PANEL_URL=https://panel.example.com
-PANEL_USERNAME=admin
-PANEL_PASSWORD=change-me
-```
-
-3. یک **Fine-grained token** بساز با دسترسی فقط روی همین ریپو و `Contents: Read-only`.
-
-**ب) روی سرور:**
-
-```bash
-# مقادیر زیر را عوض کن
-REPO="USERNAME/pg-node-config"
-TOKEN="github_pat_xxxxxxxxxxxx"
-
-sudo install -d -m 700 /etc/pg-node-deploy
-sudo curl -fsSL \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Accept: application/vnd.github.raw" \
-  "https://api.github.com/repos/${REPO}/contents/panel.conf" \
-  -o /etc/pg-node-deploy/panel.conf
-sudo chmod 600 /etc/pg-node-deploy/panel.conf
-
-sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
-```
-
-اگر ریپوی خصوصی نمی‌خواهی، جای مرحله «الف» همین دستور را بزن:
+این متن را برای دوستت بفرست؛ فقط مقادیر پنل خودش را عوض کند:
 
 ```bash
 sudo install -d -m 700 /etc/pg-node-deploy
 sudo sh -c 'umask 077; cat > /etc/pg-node-deploy/panel.conf' <<'EOF'
-PANEL_URL=https://YOUR-PANEL
-PANEL_USERNAME=YOUR-USER
-PANEL_PASSWORD=YOUR-PASS
+PANEL_URL=https://YOUR-PANEL-URL
+PANEL_USERNAME=YOUR-USERNAME
+PANEL_PASSWORD=YOUR-PASSWORD
 EOF
 
 sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
@@ -187,9 +112,9 @@ sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deplo
 ## مشاهده اطلاعات نود
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/info.sh)"
+sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/info.sh)"
 # instance خاص:
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/info.sh) --instance fin3"
+sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/info.sh) --instance fin3"
 ```
 
 خروجی شامل IP، پورت سرویس، پورت API، Certificate و API Key است و در `/root/<instance>-info.txt` هم ذخیره می‌شود.
@@ -210,9 +135,8 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-depl
 ## امنیت
 
 - فایل `/etc/pg-node-deploy/panel.conf` را با دسترسی `600` و مالک root نگه دار.
-- این فایل و توکن گیت‌هاب را جای عمومی آپلود یا commit نکن.
-- ریپوی نگه‌داری اطلاعات پنل را **خصوصی** بساز؛ ریپوی عمومی یعنی لو رفتن رمز پنل.
-- توکن را با کمترین دسترسی (`Contents: Read-only`) و کوتاه‌ترین انقضا بساز و در صورت امکان بعد از دانلود Revoke کن.
+- این فایل را جای عمومی آپلود یا داخل گیت‌هاب commit نکن.
+- برای امنیت بیشتر می‌توانی از روش متغیر محیطی استفاده کنی تا فایل ذخیره نشود (ولی رمز در history می‌ماند).
 
 ---
 
@@ -226,17 +150,14 @@ Automated PasarGuard `pg-node` + custom Xray installer that also **registers the
 - Reinstalling an existing instance stops its services first and keeps the existing ports, API key and certificate, so the panel entry stays valid.
 - Custom Xray core fixes excessive config-volume usage and disconnects configs as soon as the quota is exhausted.
 
-Panel credentials can live in a **private** GitHub repo (note: a private fork of a public repo is not possible — create a new private repo) and be fetched with a fine-grained token:
+**Method 1 — env vars (one run):**
 
 ```bash
-REPO="USERNAME/pg-node-config"; TOKEN="github_pat_xxx"
-sudo install -d -m 700 /etc/pg-node-deploy
-sudo curl -fsSL -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github.raw" \
-  "https://api.github.com/repos/${REPO}/contents/panel.conf" -o /etc/pg-node-deploy/panel.conf
-sudo chmod 600 /etc/pg-node-deploy/panel.conf
+sudo PANEL_URL="https://panel.example.com" PANEL_USERNAME="admin" PANEL_PASSWORD='change-me' \
+  bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
 ```
 
-Or create it directly on the server:
+**Method 2 — config file on the server:**
 
 ```bash
 sudo install -d -m 700 /etc/pg-node-deploy
@@ -245,12 +166,7 @@ PANEL_URL=https://panel.example.com
 PANEL_USERNAME=admin
 PANEL_PASSWORD=change-me
 EOF
-```
 
-Then install (curl or wget):
-
-```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
 sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
 ```
 
