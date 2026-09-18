@@ -39,6 +39,12 @@ warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
 
+# envval <file> <KEY> - read a value from a KEY=value file.
+envval() {
+    grep -E "^[[:space:]]*$2[[:space:]]*=" "$1" | head -n1 \
+        | sed -E 's/^[^=]*=//; s/^[[:space:]]+//; s/^["'\'']//; s/["'\'']$//' || true
+}
+
 # Re-exec as root if needed. Use BASH_SOURCE so this also works when the
 # script is sourced; never fall back to a bare `bash` (which would drop into
 # an interactive shell when the script came in through a pipe).
@@ -89,6 +95,7 @@ PG_APP_DIR="/opt/${INSTANCE}"
 PG_DATA_DIR="/var/lib/${INSTANCE}"
 PG_ENV_FILE="${PG_APP_DIR}/.env"
 PG_CERT_FILE="${PG_DATA_DIR}/certs/ssl_cert.pem"
+PG_KEY_FILE="${PG_DATA_DIR}/certs/ssl_key.pem"
 XRAY_DIR="${PG_DATA_DIR}/xray-core"
 INFO_FILE="/root/${INSTANCE}-info.txt"
 
@@ -171,48 +178,102 @@ log "Step 3/5 - installing PasarGuard node (non-interactive)"
 
 command -v curl >/dev/null 2>&1 || { apt-get install -y curl; }
 
-SERVICE_PORT="$DEFAULT_PORT"
-if port_in_use "$SERVICE_PORT"; then
-    warn "Default port ${DEFAULT_PORT} is already in use; picking a random free port."
-    SERVICE_PORT="$(pick_free_port)" || die "Could not find a free service port."
-    ok "Using random service port: ${SERVICE_PORT}"
-else
-    ok "Default service port ${DEFAULT_PORT} is free."
+REINSTALL=false
+EXISTING_API_KEY=""
+if [ -f "$PG_ENV_FILE" ]; then
+    REINSTALL=true
 fi
 
+SERVICE_PORT="$DEFAULT_PORT"
 API_PORT="$DEFAULT_API_PORT"
-if port_in_use "$API_PORT" || [ "$API_PORT" = "$SERVICE_PORT" ]; then
-    warn "Default API port ${DEFAULT_API_PORT} is unavailable; picking a random free port."
-    API_PORT="$(pick_free_port_except "$SERVICE_PORT")" || die "Could not find a free API port."
-    ok "Using random API port: ${API_PORT}"
+
+if [ "$REINSTALL" = true ]; then
+    # Keep the existing ports, API key and certificate so the panel entry
+    # created earlier stays valid after the reinstall.
+    EXISTING_SERVICE_PORT="$(envval "$PG_ENV_FILE" SERVICE_PORT)"
+    EXISTING_API_PORT="$(envval "$PG_ENV_FILE" API_PORT)"
+    EXISTING_API_KEY="$(envval "$PG_ENV_FILE" API_KEY)"
+    [ -n "$EXISTING_SERVICE_PORT" ] && SERVICE_PORT="$EXISTING_SERVICE_PORT"
+    [ -n "$EXISTING_API_PORT" ] && API_PORT="$EXISTING_API_PORT"
+    log "Existing instance found; reusing ports ${SERVICE_PORT}/${API_PORT} and its API key."
+    # Stop this instance's services so its ports are free for the installer.
+    if command -v "$INSTANCE" >/dev/null 2>&1; then
+        "$INSTANCE" down >/dev/null 2>&1 || true
+        "$INSTANCE" service-stop >/dev/null 2>&1 || true
+    fi
+    sleep 2
 else
-    ok "Default API port ${DEFAULT_API_PORT} is free."
+    if port_in_use "$SERVICE_PORT"; then
+        warn "Default port ${DEFAULT_PORT} is already in use; picking a random free port."
+        SERVICE_PORT="$(pick_free_port)" || die "Could not find a free service port."
+        ok "Using random service port: ${SERVICE_PORT}"
+    else
+        ok "Default service port ${DEFAULT_PORT} is free."
+    fi
+
+    if port_in_use "$API_PORT" || [ "$API_PORT" = "$SERVICE_PORT" ]; then
+        warn "Default API port ${DEFAULT_API_PORT} is unavailable; picking a random free port."
+        API_PORT="$(pick_free_port_except "$SERVICE_PORT")" || die "Could not find a free API port."
+        ok "Using random API port: ${API_PORT}"
+    else
+        ok "Default API port ${DEFAULT_API_PORT} is free."
+    fi
 fi
 
 log "Downloading pg-node installer..."
 curl -fsSL "$INSTALLER_URL" -o "$WORK_DIR/pg-node.sh" \
     || die "Failed to download pg-node installer from $INSTALLER_URL"
 
+INSTALL_ARGS=(install -y --service-port "$SERVICE_PORT" --api-port "$API_PORT")
+HIDDEN_CLI=""
+
+if [ "$INSTANCE" != "$DEFAULT_INSTANCE" ]; then
+    # The upstream installer rejects an explicit --name when a command with
+    # that name already exists (e.g. our own CLI from a previous install).
+    INSTALL_ARGS+=(--name "$INSTANCE")
+    EXISTING_CMD="$(command -v "$INSTANCE" 2>/dev/null || true)"
+    if [ -n "$EXISTING_CMD" ] && [ "$EXISTING_CMD" = "/usr/local/bin/${INSTANCE}" ] && [ -f "$EXISTING_CMD" ]; then
+        HIDDEN_CLI="$EXISTING_CMD"
+        mv -f "$HIDDEN_CLI" "${HIDDEN_CLI}.pg-node-deploy.bak"
+        log "Temporarily hid ${HIDDEN_CLI} so the installer accepts --name ${INSTANCE}."
+    fi
+fi
+
+if [ "$REINSTALL" = true ]; then
+    [ -n "$EXISTING_API_KEY" ] && INSTALL_ARGS+=(--api-key "$EXISTING_API_KEY")
+    if [ -f "$PG_CERT_FILE" ] && [ -f "$PG_KEY_FILE" ]; then
+        cp -f "$PG_CERT_FILE" "$WORK_DIR/reuse-cert.pem"
+        cp -f "$PG_KEY_FILE" "$WORK_DIR/reuse-key.pem"
+        INSTALL_ARGS+=(--cert-path "$WORK_DIR/reuse-cert.pem" --key-path "$WORK_DIR/reuse-key.pem")
+    fi
+fi
+
 log "Running pg-node install (instance=${INSTANCE}, service port=${SERVICE_PORT}, api port=${API_PORT})..."
 set +e
-bash "$WORK_DIR/pg-node.sh" install -y --name "$INSTANCE" \
-    --service-port "$SERVICE_PORT" --api-port "$API_PORT" 2>&1 \
+bash "$WORK_DIR/pg-node.sh" "${INSTALL_ARGS[@]}" 2>&1 \
     | tee "$WORK_DIR/install.log"
 INSTALL_RC="${PIPESTATUS[0]}"
 set -e
+
+# Restore the hidden CLI only if the installer did not recreate it.
+if [ -n "$HIDDEN_CLI" ] && [ -f "${HIDDEN_CLI}.pg-node-deploy.bak" ]; then
+    if [ ! -f "$HIDDEN_CLI" ]; then
+        mv -f "${HIDDEN_CLI}.pg-node-deploy.bak" "$HIDDEN_CLI"
+    else
+        rm -f "${HIDDEN_CLI}.pg-node-deploy.bak"
+    fi
+fi
+
 [ "$INSTALL_RC" -eq 0 ] || die "pg-node installer exited with code ${INSTALL_RC}. See log above."
 
 [ -f "$PG_ENV_FILE" ] || die "Installation finished but ${PG_ENV_FILE} was not found."
 
-API_KEY="$(grep -E '^[[:space:]]*API_KEY[[:space:]]*=' "$PG_ENV_FILE" | head -n1 \
-    | sed -E 's/^[^=]*=//; s/^[[:space:]]+//; s/^["'\'']//; s/["'\'']$//')" || true
-ENV_PORT="$(grep -E '^[[:space:]]*SERVICE_PORT[[:space:]]*=' "$PG_ENV_FILE" | head -n1 \
-    | sed -E 's/^[^=]*=//; s/^[[:space:]]+//; s/^["'\'']//; s/["'\'']$//')" || true
+API_KEY="$(envval "$PG_ENV_FILE" API_KEY)"
+ENV_PORT="$(envval "$PG_ENV_FILE" SERVICE_PORT)"
 if [ -n "$ENV_PORT" ]; then
     SERVICE_PORT="$ENV_PORT"
 fi
-ENV_API_PORT="$(grep -E '^[[:space:]]*API_PORT[[:space:]]*=' "$PG_ENV_FILE" | head -n1 \
-    | sed -E 's/^[^=]*=//; s/^[[:space:]]+//; s/^["'\'']//; s/["'\'']$//')" || true
+ENV_API_PORT="$(envval "$PG_ENV_FILE" API_PORT)"
 if [ -n "$ENV_API_PORT" ]; then
     API_PORT="$ENV_API_PORT"
 fi

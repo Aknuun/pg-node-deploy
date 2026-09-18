@@ -13,7 +13,8 @@
 - اگر روی سرور `pg-node` از قبل نصب باشد، می‌پرسد:
   - `Enter` → نصب/بازنویسی روی همان instance موجود
   - نام جدید (مثلاً `fin3`) → نصب instance جدید و نام نود در پنل `<IP>-fin3`
-- اگر پورت پیش‌فرض (62050 سرویس / 62051 API) اشغال باشد، یک پورت آزاد تصادفی انتخاب می‌کند
+- اگر پورت پیش‌فرض (62050 سرویس / 62051 API) اشغال باشد، در نصب تازه یک پورت آزاد تصادفی انتخاب می‌کند
+- در **نصب مجدد** روی instance موجود، پورت‌ها، API Key و گواهی قبلی حفظ می‌شوند تا ورودی نود در پنل معتبر بماند
 - هسته سفارشی Xray برای هر instance جداگانه نصب می‌شود و `XRAY_EXECUTABLE_PATH` همان instance ست می‌شود
 - **افزودن خودکار نود به پنل** از طریق REST API پنل (Certificate + API Key خودکار خوانده می‌شود)
 - هسته سفارشی این پروژه مشکل **مصرف بی‌رویه حجم** را حل کرده؛ به‌محض تمام‌شدن حجم کاربر، کانفیگ سریع قطع می‌شود
@@ -77,6 +78,8 @@ Press Enter to (re)install on it, or type a new instance name:
 
 در حالت غیرتعاملی (Actions) به‌صورت پیش‌فرض روی `pg-node` نصب می‌کند؛ برای instance دلخواه `NODE_INSTANCE` را ست کن.
 
+> در نصب مجدد (Enter روی instance موجود)، سرویس فعلی متوقف می‌شود و همان پورت‌ها، API Key و Certificate حفظ می‌شوند؛ پس ثبت قبلی نود در پنل دست‌نخورده می‌ماند.
+
 اگر هیچ اطلاعات پنلی ندهی، نصب انجام می‌شود ولی مرحله افزودن به پنل رد می‌شود. بعداً این‌طور ثبت کن:
 
 ```bash
@@ -135,7 +138,8 @@ Automated PasarGuard `pg-node` + custom Xray installer that also **registers the
 
 - Panel node name: `<server-ip>-<hostname>` (or `<server-ip>-<instance>` for a custom instance).
 - If `pg-node` is already installed, it asks for Enter (reinstall) or a new instance name.
-- Uses random free ports when 62050/62051 are busy.
+- Uses random free ports when 62050/62051 are busy (fresh installs only).
+- Reinstalling an existing instance stops its services first and keeps the existing ports, API key and certificate, so the panel entry stays valid.
 - Custom Xray core fixes excessive config-volume usage and disconnects configs as soon as the quota is exhausted.
 
 Configure panel credentials once (GitHub Secrets `PANEL_URL`, `PANEL_USERNAME`, `PANEL_PASSWORD`, optional `PANEL_CORE_CONFIG_ID`), or create `/etc/pg-node-deploy/panel.conf`, then run:
