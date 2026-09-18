@@ -1,0 +1,60 @@
+name: Install PasarGuard Node
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: "Target server IP or hostname"
+        required: true
+        type: string
+      user:
+        description: "SSH username"
+        required: false
+        default: "root"
+        type: string
+      port:
+        description: "SSH port"
+        required: false
+        default: "22"
+        type: string
+      timeout:
+        description: "Script command timeout (e.g. 30m)"
+        required: false
+        default: "30m"
+        type: string
+
+concurrency:
+  group: pg-node-deploy
+  cancel-in-progress: false
+
+jobs:
+  install:
+    name: Deploy pg-node on server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Upload install script to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ inputs.host }}
+          username: ${{ inputs.user }}
+          port: ${{ inputs.port }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "install.sh"
+          target: "/tmp/pg-node-deploy"
+          overwrite: true
+
+      - name: Run install script
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ inputs.host }}
+          username: ${{ inputs.user }}
+          port: ${{ inputs.port }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: ${{ inputs.timeout }}
+          script_stop: true
+          script: |
+            set -e
+            sudo bash /tmp/pg-node-deploy/install.sh
