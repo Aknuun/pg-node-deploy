@@ -9,11 +9,13 @@ PANEL_USERNAME=admin
 PANEL_PASSWORD=change-me
 
 # ---- optional ----
+# Local pg-node instance name (default: pg-node)
+#NODE_INSTANCE=pg-node
 # Core config id on the panel (default: 1)
 #PANEL_CORE_CONFIG_ID=1
 # Connection type: grpc (default) or nats
 #PANEL_CONNECTION_TYPE=grpc
-# Name shown in the panel (default: pg-node-<hostname>)
-#NODE_NAME=my-node-1
+# Name shown in the panel (default: <IP>-<hostname>)
+#NODE_NAME=204.168.129.199-fin2
 # Address the panel uses to reach this node (default: auto-detected public IP)
 #NODE_ADDRESS=203.0.113.10

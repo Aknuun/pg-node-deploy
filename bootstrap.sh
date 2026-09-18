@@ -1,31 +1,29 @@
 #!/usr/bin/env bash
 #
-# PasarGuard (pg-node) fully automated installer + xray-core setup.
+# PasarGuard (pg-node) fully automated installer + custom xray-core setup,
+# including automatic registration of the node in a PasarGuard panel.
 #
 # Steps:
 #   1) apt update
 #   2) configure + lock /etc/resolv.conf
-#   3) install pg-node non-interactively (defaults, random free port if 62050 is busy)
-#   4) download the xray core archive
-#   5) install xray core, point pg-node at it and restart
+#   3) install pg-node non-interactively (random free port if 62050/62051 are busy)
+#   4) download the custom xray core
+#   5) install xray core for this instance, point pg-node at it and restart
+#   6) (optional) register the node in the panel
 #
-# Run as root:  sudo bash install.sh
+# Run as root:      sudo bash bootstrap.sh
+# Custom instance:  sudo NODE_INSTANCE=fin3 bash bootstrap.sh
 #
 set -Eeuo pipefail
 
 # --------------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------------
-PG_APP_NAME="pg-node"
-PG_APP_DIR="/opt/${PG_APP_NAME}"
-PG_DATA_DIR="/var/lib/${PG_APP_NAME}"
-PG_ENV_FILE="${PG_APP_DIR}/.env"
-PG_CERT_FILE="${PG_DATA_DIR}/certs/ssl_cert.pem"
+DEFAULT_INSTANCE="pg-node"
 DEFAULT_PORT="62050"
-XRAY_DIR="${PG_DATA_DIR}/xray-core"
+DEFAULT_API_PORT="62051"
 XRAY_ZIP_URL="https://github.com/Aknuun/autonode-bot/releases/download/1.0/xray-amd64.zip"
 INSTALLER_URL="https://github.com/PasarGuard/scripts/raw/main/pg-node.sh"
-INFO_FILE="/root/pg-node-info.txt"
 REPO_RAW="https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main"
 REGISTER_SCRIPT_NAME="register-node.sh"
 PANEL_CONF_FILE="${PANEL_CONF_FILE:-/etc/pg-node-deploy/panel.conf}"
@@ -56,6 +54,45 @@ SCRIPT_DIR=""
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
+
+# --------------------------------------------------------------------------
+# Instance name - several pg-node installs can coexist on one server.
+# Resolution order: NODE_INSTANCE env -> interactive prompt (when an existing
+# install is found) -> default "pg-node".
+# --------------------------------------------------------------------------
+validate_instance_name() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$ ]]
+}
+
+INSTANCE="${NODE_INSTANCE:-}"
+if [ -z "$INSTANCE" ]; then
+    if [ -d "/opt/${DEFAULT_INSTANCE}" ]; then
+        if [ -t 0 ]; then
+            warn "An existing '${DEFAULT_INSTANCE}' install was found at /opt/${DEFAULT_INSTANCE}."
+            printf '    Press Enter to (re)install on it, or type a new instance name: ' >&2
+            read -r INSTANCE || true
+            [ -n "$INSTANCE" ] || INSTANCE="$DEFAULT_INSTANCE"
+        else
+            warn "Existing '${DEFAULT_INSTANCE}' install found; reinstalling it (non-interactive)."
+            INSTANCE="$DEFAULT_INSTANCE"
+        fi
+    else
+        INSTANCE="$DEFAULT_INSTANCE"
+    fi
+fi
+
+validate_instance_name "$INSTANCE" \
+    || die "Invalid instance name '${INSTANCE}'. Use 1-63 chars: letters, digits, '_' or '-', starting with a letter or digit."
+
+PG_APP_NAME="$INSTANCE"
+PG_APP_DIR="/opt/${INSTANCE}"
+PG_DATA_DIR="/var/lib/${INSTANCE}"
+PG_ENV_FILE="${PG_APP_DIR}/.env"
+PG_CERT_FILE="${PG_DATA_DIR}/certs/ssl_cert.pem"
+XRAY_DIR="${PG_DATA_DIR}/xray-core"
+INFO_FILE="/root/${INSTANCE}-info.txt"
+
+log "Using pg-node instance: ${INSTANCE}"
 
 WORK_DIR="$(mktemp -d /tmp/pg-node-install.XXXXXX)"
 cleanup() { rm -rf "$WORK_DIR"; }
@@ -91,10 +128,14 @@ port_in_use() {
 }
 
 pick_free_port() {
-    local p i
+    pick_free_port_except ""
+}
+
+pick_free_port_except() {
+    local exclude="$1" p i
     for i in $(seq 1 100); do
         p="$(shuf -i 20000-65000 -n 1 2>/dev/null || echo $(( (RANDOM % 45000) + 20000 )))"
-        if ! port_in_use "$p"; then
+        if [ "$p" != "$exclude" ] && ! port_in_use "$p"; then
             printf '%s\n' "$p"
             return 0
         fi
@@ -139,13 +180,23 @@ else
     ok "Default service port ${DEFAULT_PORT} is free."
 fi
 
+API_PORT="$DEFAULT_API_PORT"
+if port_in_use "$API_PORT" || [ "$API_PORT" = "$SERVICE_PORT" ]; then
+    warn "Default API port ${DEFAULT_API_PORT} is unavailable; picking a random free port."
+    API_PORT="$(pick_free_port_except "$SERVICE_PORT")" || die "Could not find a free API port."
+    ok "Using random API port: ${API_PORT}"
+else
+    ok "Default API port ${DEFAULT_API_PORT} is free."
+fi
+
 log "Downloading pg-node installer..."
 curl -fsSL "$INSTALLER_URL" -o "$WORK_DIR/pg-node.sh" \
     || die "Failed to download pg-node installer from $INSTALLER_URL"
 
-log "Running pg-node install (defaults + port ${SERVICE_PORT})..."
+log "Running pg-node install (instance=${INSTANCE}, service port=${SERVICE_PORT}, api port=${API_PORT})..."
 set +e
-bash "$WORK_DIR/pg-node.sh" install -y --service-port "$SERVICE_PORT" 2>&1 \
+bash "$WORK_DIR/pg-node.sh" install -y --name "$INSTANCE" \
+    --service-port "$SERVICE_PORT" --api-port "$API_PORT" 2>&1 \
     | tee "$WORK_DIR/install.log"
 INSTALL_RC="${PIPESTATUS[0]}"
 set -e
@@ -159,6 +210,11 @@ ENV_PORT="$(grep -E '^[[:space:]]*SERVICE_PORT[[:space:]]*=' "$PG_ENV_FILE" | he
     | sed -E 's/^[^=]*=//; s/^[[:space:]]+//; s/^["'\'']//; s/["'\'']$//')" || true
 if [ -n "$ENV_PORT" ]; then
     SERVICE_PORT="$ENV_PORT"
+fi
+ENV_API_PORT="$(grep -E '^[[:space:]]*API_PORT[[:space:]]*=' "$PG_ENV_FILE" | head -n1 \
+    | sed -E 's/^[^=]*=//; s/^[[:space:]]+//; s/^["'\'']//; s/["'\'']$//')" || true
+if [ -n "$ENV_API_PORT" ]; then
+    API_PORT="$ENV_API_PORT"
 fi
 
 CERT=""
@@ -224,6 +280,15 @@ if [ -z "$SERVER_IP" ]; then
 fi
 [ -n "$SERVER_IP" ] || SERVER_IP="unknown"
 
+# Panel node name: <public-ip>-<hostname> for the default instance,
+# <public-ip>-<instance> for a custom one.
+if [ "$INSTANCE" = "$DEFAULT_INSTANCE" ]; then
+    NODE_SUFFIX="$(hostname -s 2>/dev/null || echo "$SERVER_IP")"
+else
+    NODE_SUFFIX="$INSTANCE"
+fi
+NODE_NAME="${NODE_NAME:-${SERVER_IP}-${NODE_SUFFIX}}"
+
 SEP="======================================================================"
 
 # Orange (256-color if available, otherwise bright yellow fallback).
@@ -239,8 +304,11 @@ RESET=$'\033[0m'
     echo "$SEP"
     echo " PasarGuard node installed - INSTALL DONE"
     echo "$SEP"
+    echo " Instance     : ${INSTANCE}"
+    echo " Node name    : ${NODE_NAME}"
     echo " Server IP    : ${SERVER_IP}"
     echo " Service port : ${SERVICE_PORT}"
+    echo " API port     : ${API_PORT}"
     echo " Certificate  : ${PG_CERT_FILE}"
     echo " API Key      : ${API_KEY}"
     echo "$SEP"
@@ -259,9 +327,13 @@ chmod 600 "$INFO_FILE"
 printf '%s\n' "$SEP"
 printf ' PasarGuard node installed - INSTALL DONE\n'
 printf '%s\n' "$SEP"
+printf ' Instance     : %s\n' "$INSTANCE"
+printf ' Node name    : '
+printf '%s%s%s\n' "$ORANGE" "$NODE_NAME" "$RESET"
 printf ' Server IP    : '
 printf '%s%s%s\n' "$ORANGE" "$SERVER_IP" "$RESET"
 printf ' Service port : %s\n' "$SERVICE_PORT"
+printf ' API port     : %s\n' "$API_PORT"
 printf ' Certificate  : %s\n' "$PG_CERT_FILE"
 printf ' API Key      : %s\n' "$API_KEY"
 printf '%s\n' "$SEP"
@@ -292,13 +364,13 @@ if panel_credentials_available; then
         fi
     fi
     if [ -n "$REGISTER_SCRIPT" ]; then
-        if bash "$REGISTER_SCRIPT"; then
+        if NODE_INSTANCE="$INSTANCE" NODE_NAME="$NODE_NAME" bash "$REGISTER_SCRIPT"; then
             ok "Panel registration finished."
         else
-            warn "Panel registration failed. You can retry later with: sudo bash ${REGISTER_SCRIPT_NAME}"
+            warn "Panel registration failed. You can retry later with: sudo NODE_INSTANCE=${INSTANCE} bash ${REGISTER_SCRIPT_NAME}"
         fi
     fi
 else
     warn "No panel credentials found (PANEL_URL/PANEL_USERNAME/PANEL_PASSWORD or ${PANEL_CONF_FILE})."
-    warn "Skipping panel registration. Run it later with: sudo bash ${REGISTER_SCRIPT_NAME}"
+    warn "Skipping panel registration. Run it later with: sudo NODE_INSTANCE=${INSTANCE} bash ${REGISTER_SCRIPT_NAME}"
 fi

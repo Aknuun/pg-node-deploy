@@ -12,19 +12,22 @@
 #   3) Config file: /etc/pg-node-deploy/panel.conf (override with PANEL_CONF_FILE)
 #
 # Optional values (env, config file or flags):
+#   NODE_INSTANCE          local pg-node instance name (default: pg-node)
 #   PANEL_CORE_CONFIG_ID   core config id on the panel (default: 1)
 #   PANEL_CONNECTION_TYPE  grpc | nats (default: grpc)
-#   NODE_NAME              node name shown in the panel (default: pg-node-<host>)
+#   NODE_NAME              node name shown in the panel
+#                          (default: <public-ip>-<hostname> for the default
+#                          instance, <public-ip>-<instance> otherwise)
 #   NODE_ADDRESS           address the panel uses to reach this node
 #                          (default: auto-detected public IP)
 #
 # Run as root:  sudo bash register-node.sh
+# Custom instance: sudo NODE_INSTANCE=fin3 bash register-node.sh
 #
 set -Eeuo pipefail
 
-PG_ENV_FILE="/opt/pg-node/.env"
-PG_CERT_FILE="/var/lib/pg-node/certs/ssl_cert.pem"
 PANEL_CONF_FILE="${PANEL_CONF_FILE:-/etc/pg-node-deploy/panel.conf}"
+DEFAULT_INSTANCE="pg-node"
 DEFAULT_API_PORT="62051"
 
 export DEBIAN_FRONTEND=noninteractive
@@ -54,6 +57,7 @@ while [ "$#" -gt 0 ]; do
         --panel-password)    PANEL_PASSWORD="${2:-}"; shift 2 ;;
         --core-config-id)    PANEL_CORE_CONFIG_ID="${2:-}"; shift 2 ;;
         --connection-type)   PANEL_CONNECTION_TYPE="${2:-}"; shift 2 ;;
+        --instance)          NODE_INSTANCE="${2:-}"; shift 2 ;;
         --node-name)         NODE_NAME="${2:-}"; shift 2 ;;
         --node-address)      NODE_ADDRESS="${2:-}"; shift 2 ;;
         --conf)              PANEL_CONF_FILE="${2:-}"; shift 2 ;;
@@ -84,6 +88,7 @@ if [ -f "$PANEL_CONF_FILE" ]; then
             PANEL_PASSWORD)       [ -n "${PANEL_PASSWORD:-}" ]       || PANEL_PASSWORD="$value" ;;
             PANEL_CORE_CONFIG_ID) [ -n "${PANEL_CORE_CONFIG_ID:-}" ] || PANEL_CORE_CONFIG_ID="$value" ;;
             PANEL_CONNECTION_TYPE)[ -n "${PANEL_CONNECTION_TYPE:-}" ]|| PANEL_CONNECTION_TYPE="$value" ;;
+            NODE_INSTANCE)        [ -n "${NODE_INSTANCE:-}" ]        || NODE_INSTANCE="$value" ;;
             NODE_NAME)            [ -n "${NODE_NAME:-}" ]            || NODE_NAME="$value" ;;
             NODE_ADDRESS)         [ -n "${NODE_ADDRESS:-}" ]         || NODE_ADDRESS="$value" ;;
         esac
@@ -124,9 +129,16 @@ PANEL_CONNECTION_TYPE="${PANEL_CONNECTION_TYPE:-grpc}"
 [ -n "$PANEL_PASSWORD" ] || die "Panel password is empty."
 
 # --------------------------------------------------------------------------
+# Local instance paths
+# --------------------------------------------------------------------------
+NODE_INSTANCE="${NODE_INSTANCE:-$DEFAULT_INSTANCE}"
+PG_ENV_FILE="/opt/${NODE_INSTANCE}/.env"
+PG_CERT_FILE="/var/lib/${NODE_INSTANCE}/certs/ssl_cert.pem"
+
+# --------------------------------------------------------------------------
 # Local node info
 # --------------------------------------------------------------------------
-[ -f "$PG_ENV_FILE" ] || die "Not found: ${PG_ENV_FILE} (is pg-node installed?)"
+[ -f "$PG_ENV_FILE" ] || die "Not found: ${PG_ENV_FILE} (is pg-node instance '${NODE_INSTANCE}' installed?)"
 
 envval() {
     grep -E "^[[:space:]]*$1[[:space:]]*=" "$PG_ENV_FILE" | head -n1 \
@@ -151,7 +163,12 @@ fi
 [ -n "$NODE_ADDRESS" ] || die "Could not auto-detect the server IP; pass --node-address."
 
 if [ -z "${NODE_NAME:-}" ]; then
-    NODE_NAME="pg-node-$(hostname -s 2>/dev/null || echo "$NODE_ADDRESS")"
+    if [ "$NODE_INSTANCE" = "$DEFAULT_INSTANCE" ]; then
+        NODE_SUFFIX="$(hostname -s 2>/dev/null || echo "$NODE_ADDRESS")"
+    else
+        NODE_SUFFIX="$NODE_INSTANCE"
+    fi
+    NODE_NAME="${NODE_ADDRESS}-${NODE_SUFFIX}"
 fi
 
 log "Registering node '${NODE_NAME}' (${NODE_ADDRESS}:${SERVICE_PORT}, api ${API_PORT}) in ${PANEL_URL}"

@@ -2,11 +2,11 @@
 #
 # Print the pg-node Certificate and API Key from an existing installation.
 # Run as root:  sudo bash info.sh
+# Custom instance: sudo bash info.sh --instance fin3
 #
 set -Eeuo pipefail
 
-PG_ENV_FILE="/opt/pg-node/.env"
-PG_CERT_FILE="/var/lib/pg-node/certs/ssl_cert.pem"
+NODE_INSTANCE="${NODE_INSTANCE:-pg-node}"
 
 if [ "$(id -u)" -ne 0 ]; then
     SELF="${BASH_SOURCE[0]:-}"
@@ -17,11 +17,28 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-[ -f "$PG_ENV_FILE" ] || { echo "Not found: $PG_ENV_FILE (is pg-node installed?)" >&2; exit 1; }
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --instance)   NODE_INSTANCE="${2:-}"; shift 2 ;;
+        --instance=*) NODE_INSTANCE="${1#*=}"; shift ;;
+        -h|--help)
+            grep -E '^#' "$0" | sed 's/^# \{0,1\}//' | head -n 12 || true
+            exit 0
+            ;;
+        *) echo "Unknown argument: $1 (use --instance <name>)" >&2; exit 1 ;;
+    esac
+done
+
+PG_ENV_FILE="/opt/${NODE_INSTANCE}/.env"
+PG_CERT_FILE="/var/lib/${NODE_INSTANCE}/certs/ssl_cert.pem"
+
+[ -f "$PG_ENV_FILE" ] || { echo "Not found: $PG_ENV_FILE (is pg-node instance '${NODE_INSTANCE}' installed?)" >&2; exit 1; }
 
 API_KEY="$(grep -E '^[[:space:]]*API_KEY[[:space:]]*=' "$PG_ENV_FILE" | head -n1 \
     | sed -E 's/^[^=]*=//; s/^[[:space:]]+//; s/^["'\'']//; s/["'\'']$//')" || true
 SERVICE_PORT="$(grep -E '^[[:space:]]*SERVICE_PORT[[:space:]]*=' "$PG_ENV_FILE" | head -n1 \
+    | sed -E 's/^[^=]*=//; s/^[[:space:]]+//; s/^["'\'']//; s/["'\'']$//')" || true
+API_PORT="$(grep -E '^[[:space:]]*API_PORT[[:space:]]*=' "$PG_ENV_FILE" | head -n1 \
     | sed -E 's/^[^=]*=//; s/^[[:space:]]+//; s/^["'\'']//; s/["'\'']$//')" || true
 CERT=""
 if [ -f "$PG_CERT_FILE" ]; then
@@ -47,9 +64,11 @@ RESET=$'\033[0m'
 printf '%s\n' "$SEP"
 printf ' PasarGuard node info\n'
 printf '%s\n' "$SEP"
+printf ' Instance     : %s\n' "$NODE_INSTANCE"
 printf ' Server IP    : '
 printf '%s%s%s\n' "$ORANGE" "$SERVER_IP" "$RESET"
 printf ' Service port : %s\n' "$SERVICE_PORT"
+printf ' API port     : %s\n' "$API_PORT"
 printf ' Certificate  : %s\n' "$PG_CERT_FILE"
 printf ' API Key      : %s\n' "$API_KEY"
 printf '%s\n' "$SEP"

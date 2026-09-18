@@ -17,6 +17,11 @@ on:
         required: false
         default: "22"
         type: string
+      instance:
+        description: "pg-node instance name (default pg-node; use a new name to install a second node)"
+        required: false
+        default: "pg-node"
+        type: string
       timeout:
         description: "Script command timeout (e.g. 30m)"
         required: false
@@ -53,6 +58,7 @@ jobs:
           PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
           PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
           PANEL_CORE_CONFIG_ID: ${{ secrets.PANEL_CORE_CONFIG_ID }}
+          NODE_INSTANCE: ${{ inputs.instance }}
         with:
           host: ${{ inputs.host }}
           username: ${{ inputs.user }}
@@ -60,12 +66,12 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           command_timeout: ${{ inputs.timeout }}
           script_stop: true
-          envs: PANEL_URL,PANEL_USERNAME,PANEL_PASSWORD,PANEL_CORE_CONFIG_ID
+          envs: PANEL_URL,PANEL_USERNAME,PANEL_PASSWORD,PANEL_CORE_CONFIG_ID,NODE_INSTANCE
           script: |
             set -e
             if [ -n "${PANEL_URL:-}" ] && [ -n "${PANEL_USERNAME:-}" ] && [ -n "${PANEL_PASSWORD:-}" ]; then
-              install -d -m 700 /etc/pg-node-deploy
               umask 077
+              tmp_conf="$(mktemp)"
               {
                 printf 'PANEL_URL=%s\n' "$PANEL_URL"
                 printf 'PANEL_USERNAME=%s\n' "$PANEL_USERNAME"
@@ -73,7 +79,9 @@ jobs:
                 if [ -n "${PANEL_CORE_CONFIG_ID:-}" ]; then
                   printf 'PANEL_CORE_CONFIG_ID=%s\n' "$PANEL_CORE_CONFIG_ID"
                 fi
-              } > /etc/pg-node-deploy/panel.conf
-              chmod 600 /etc/pg-node-deploy/panel.conf
+              } > "$tmp_conf"
+              sudo install -d -m 700 /etc/pg-node-deploy
+              sudo install -m 600 "$tmp_conf" /etc/pg-node-deploy/panel.conf
+              rm -f "$tmp_conf"
             fi
-            sudo bash /tmp/pg-node-deploy/bootstrap.sh
+            sudo NODE_INSTANCE="$NODE_INSTANCE" bash /tmp/pg-node-deploy/bootstrap.sh

@@ -1,44 +1,32 @@
 # pg-node-deploy
 
-نصب کاملاً خودکار **PasarGuard Node (pg-node)** + هسته **Xray** و افزودن خودکار نود به پنل.
+نصب کاملاً خودکار **PasarGuard Node (pg-node)** + هسته سفارشی **Xray** و **افزودن خودکار نود به پنل PasarGuard**.
 
-> Supported OS: Ubuntu / Debian (root access required)
-
----
-
-## نصب یک‌خطی
-
-```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
-```
-
-اسکریپت این کارها را انجام می‌دهد:
-
-1. `apt update`
-2. تنظیم و قفل‌کردن `/etc/resolv.conf`
-3. نصب غیرتعاملی `pg-node` (اگر پورت 62050 اشغال باشد، یک پورت آزاد انتخاب می‌کند)
-4. دانلود هسته Xray
-5. نصب Xray، اتصال pg-node به آن و ری‌استارت سرویس
-
-در پایان، **آی‌پی سرور، پورت، گواهی (Certificate) و API Key** چاپ می‌شود و نسخه‌ای هم در `/root/pg-node-info.txt` ذخیره می‌شود.
-
-### نمایش دوباره اطلاعات نود
-
-```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/info.sh)"
-```
+> Ubuntu / Debian — نیاز به دسترسی root
 
 ---
 
-## افزودن خودکار نود به پنل
+## قابلیت‌ها
 
-اگر اطلاعات پنل مشخص شده باشد، بعد از نصب، نود به‌صورت خودکار در پنل ساخته می‌شود
-(`POST /api/node` روی پنل PasarGuard). سه راه برای دادن اطلاعات پنل وجود دارد:
+- نصب غیرتعاملی `pg-node` و هسته Xray
+- **نام‌گذاری نود در پنل:** `<IP سرور>-<hostname>` (مثلاً `204.168.129.199-fin2`)
+- اگر روی سرور `pg-node` از قبل نصب باشد، می‌پرسد:
+  - `Enter` → نصب/بازنویسی روی همان instance موجود
+  - نام جدید (مثلاً `fin3`) → نصب instance جدید و نام نود در پنل `<IP>-fin3`
+- اگر پورت پیش‌فرض (62050 سرویس / 62051 API) اشغال باشد، یک پورت آزاد تصادفی انتخاب می‌کند
+- هسته سفارشی Xray برای هر instance جداگانه نصب می‌شود و `XRAY_EXECUTABLE_PATH` همان instance ست می‌شود
+- **افزودن خودکار نود به پنل** از طریق REST API پنل (Certificate + API Key خودکار خوانده می‌شود)
+- هسته سفارشی این پروژه مشکل **مصرف بی‌رویه حجم** را حل کرده؛ به‌محض تمام‌شدن حجم کاربر، کانفیگ سریع قطع می‌شود
+
+---
+
+## افزودن به پنل (یک‌بار تنظیم کن)
+
+یکی از سه روش زیر را یک‌بار انجام بده؛ بعد از آن هر نصب خودکار در پنل ثبت می‌شود.
 
 ### روش ۱ (پیشنهادی) — GitHub Actions + Secrets
 
-فقط یک‌بار مقادیر را در تنظیمات ریپو وارد کنید:
-`Settings → Secrets and variables → Actions → New repository secret`
+`Settings → Secrets and variables → Actions`:
 
 | Secret | توضیح | اجباری |
 |---|---|---|
@@ -46,16 +34,11 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-depl
 | `PANEL_URL` | آدرس پنل، مثلاً `https://panel.example.com` | بله |
 | `PANEL_USERNAME` | نام کاربری ادمین پنل | بله |
 | `PANEL_PASSWORD` | رمز ادمین پنل | بله |
-| `PANEL_CORE_CONFIG_ID` | شناسه Core Config در پنل (پیش‌فرض `1`) | خیر |
+| `PANEL_CORE_CONFIG_ID` | شناسه Core Config (پیش‌فرض `1`) | خیر |
 
-سپس از تب **Actions** ورک‌فلو **Install PasarGuard Node** را اجرا کنید و فقط
-`host` سرور را بدهید. نصب و افزودن نود با هم انجام می‌شود.
-
-> امن: پسوردها داخل ریپو ذخیره نمی‌شوند و در لاگ‌ها هم چاپ نمی‌شوند.
+سپس از تب **Actions** ورک‌فلو **Install PasarGuard Node** را اجرا کن و فقط `host` (و در صورت نیاز `instance`) را بده.
 
 ### روش ۲ — فایل کانفیگ روی سرور
-
-یک‌بار فایل زیر را بسازید؛ از این به بعد هر اجرای `bootstrap.sh` نود را هم به پنل اضافه می‌کند.
 
 ```bash
 sudo install -d -m 700 /etc/pg-node-deploy
@@ -66,33 +49,63 @@ PANEL_PASSWORD=change-me
 EOF
 ```
 
-سپس نصب عادی:
+### روش ۳ — متغیر محیطی (برای یک اجرا)
+
+```bash
+sudo PANEL_URL="https://panel.example.com" \
+     PANEL_USERNAME="admin" \
+     PANEL_PASSWORD='change-me' \
+     bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
+```
+
+---
+
+## نصب + افزودن خودکار
+
+بعد از تنظیم یکی از روش‌های بالا:
 
 ```bash
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
 ```
 
-برای افزودن دستی بعد از نصب هم:
+اگر روی سرور نصب قبلی وجود داشته باشد، همین‌جا می‌پرسد (فقط وقتی ترمینال تعاملی باشد):
+
+```
+An existing 'pg-node' install was found at /opt/pg-node.
+Press Enter to (re)install on it, or type a new instance name:
+```
+
+در حالت غیرتعاملی (Actions) به‌صورت پیش‌فرض روی `pg-node` نصب می‌کند؛ برای instance دلخواه `NODE_INSTANCE` را ست کن.
+
+اگر هیچ اطلاعات پنلی ندهی، نصب انجام می‌شود ولی مرحله افزودن به پنل رد می‌شود. بعداً این‌طور ثبت کن:
 
 ```bash
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/register-node.sh)"
+# یا برای instance خاص:
+sudo NODE_INSTANCE=fin3 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/register-node.sh)"
 ```
 
-### روش ۳ — متغیرهای محیطی (برای یک اجرا)
+---
+
+## نام‌گذاری و چند نود روی یک سرور
+
+- نام نود در پنل:
+  - instance پیش‌فرض `pg-node` → `<IP>-<hostname>` (مثلاً `204.168.129.199-fin2`)
+  - instance دلخواه `fin3` → `<IP>-fin3`
+- هر instance مسیرهای جدا دارد: `/opt/<name>` ، `/var/lib/<name>` ، سرویس `<name>-service`
+- هسته Xray هم داخل `/var/lib/<name>/xray-core` قرار می‌گیرد
+
+---
+
+## مشاهده اطلاعات نود
 
 ```bash
-sudo PANEL_URL="https://panel.example.com" \
-     PANEL_USERNAME="admin" \
-     PANEL_PASSWORD="change-me" \
-     bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/info.sh)"
+# instance خاص:
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/info.sh) --instance fin3"
 ```
 
-> در این روش پسورد در history شل ذخیره می‌شود؛ ترجیحاً از روش ۱ یا ۲ استفاده کنید.
-
-### اگر اطلاعات پنل داده نشود
-
-نصب بدون هیچ مشکلی انجام می‌شود و فقط مرحله افزودن به پنل رد می‌شود. هر زمان خواستید:
-`register-node.sh` را با یکی از سه روش بالا اجرا کنید.
+خروجی شامل IP، پورت سرویس، پورت API، Certificate و API Key است و در `/root/<instance>-info.txt` هم ذخیره می‌شود.
 
 ---
 
@@ -101,8 +114,8 @@ sudo PANEL_URL="https://panel.example.com" \
 | فایل | کار |
 |---|---|
 | `bootstrap.sh` | نصب pg-node + Xray و (اختیاری) ثبت نود در پنل |
-| `register-node.sh` | فقط ثبت نود در پنل با استفاده از اطلاعات موجود روی سرور |
-| `info.sh` | نمایش IP، پورت، گواهی و API Key نود |
+| `register-node.sh` | فقط ثبت نود در پنل با اطلاعات موجود روی سرور |
+| `info.sh` | نمایش IP، پورت‌ها، گواهی و API Key هر instance |
 | `panel.conf.example` | نمونه فایل اطلاعات پنل |
 | `.github/workflows/deploy.yml` | نصب از راه دور روی سرور via GitHub Actions |
 
@@ -110,25 +123,25 @@ sudo PANEL_URL="https://panel.example.com" \
 
 ## امنیت
 
-- هرگز فایل `panel.conf` یا رمز پنل را داخل ریپو commit نکنید (در `.gitignore` هست).
-- برای اتوماسیون از **GitHub Secrets** استفاده کنید.
+- هرگز `panel.conf` یا رمز پنل را داخل ریپو commit نکن (در `.gitignore` هست).
+- برای اتوماسیون از **GitHub Secrets** استفاده کن.
 - فایل `/etc/pg-node-deploy/panel.conf` با دسترسی `600` و مالک root نگه داشته می‌شود.
 
 ---
 
 ## English (short)
 
-One-line install:
+Automated PasarGuard `pg-node` + custom Xray installer that also **registers the node in the panel**.
+
+- Panel node name: `<server-ip>-<hostname>` (or `<server-ip>-<instance>` for a custom instance).
+- If `pg-node` is already installed, it asks for Enter (reinstall) or a new instance name.
+- Uses random free ports when 62050/62051 are busy.
+- Custom Xray core fixes excessive config-volume usage and disconnects configs as soon as the quota is exhausted.
+
+Configure panel credentials once (GitHub Secrets `PANEL_URL`, `PANEL_USERNAME`, `PANEL_PASSWORD`, optional `PANEL_CORE_CONFIG_ID`), or create `/etc/pg-node-deploy/panel.conf`, then run:
 
 ```bash
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
 ```
 
-Auto-register the node in a PasarGuard panel by either:
-
-- adding repo secrets `PANEL_URL`, `PANEL_USERNAME`, `PANEL_PASSWORD` (and optional `PANEL_CORE_CONFIG_ID`) and running the **Install PasarGuard Node** workflow, or
-- creating `/etc/pg-node-deploy/panel.conf` (see `panel.conf.example`, `chmod 600`), or
-- passing `PANEL_URL`, `PANEL_USERNAME`, `PANEL_PASSWORD` as environment variables.
-
-Show node info: `sudo bash -c "$(curl -fsSL .../info.sh)"`
-Register manually: `sudo bash -c "$(curl -fsSL .../register-node.sh)"`
+Info: `... info.sh [--instance NAME]` · Register only: `... register-node.sh [--instance NAME]`
