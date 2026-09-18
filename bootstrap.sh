@@ -186,8 +186,8 @@ fi
 ok "XRAY_EXECUTABLE_PATH set to ${XRAY_DIR}/xray"
 
 if command -v "$PG_APP_NAME" >/dev/null 2>&1; then
-    log "Restarting pg-node..."
-    "$PG_APP_NAME" restart || warn "pg-node restart returned a non-zero exit code."
+    log "Restarting pg-node (no log follow)..."
+    "$PG_APP_NAME" restart -n || warn "pg-node restart returned a non-zero exit code."
 else
     warn "pg-node CLI not found in PATH; skipping restart."
 fi
