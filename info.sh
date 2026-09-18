@@ -29,20 +29,27 @@ if [ -f "$PG_CERT_FILE" ]; then
 fi
 
 SEP="======================================================================"
-cat <<EOF
-$SEP
- PasarGuard node info
-$SEP
- Service port : ${SERVICE_PORT}
- Certificate  : ${PG_CERT_FILE}
- API Key      : ${API_KEY}
-$SEP
------ BEGIN CERTIFICATE (select & copy everything below) -----
-$CERT
------ END CERTIFICATE -----
-$SEP
------ API KEY -----
-${API_KEY}
------ END API KEY -----
-$SEP
-EOF
+
+# Orange (256-color if available, otherwise bright yellow fallback).
+if command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null || echo 8)" -ge 256 ]; then
+    ORANGE=$'\033[38;5;208m'
+else
+    ORANGE=$'\033[33m'
+fi
+RESET=$'\033[0m'
+
+printf '%s\n' "$SEP"
+printf ' PasarGuard node info\n'
+printf '%s\n' "$SEP"
+printf ' Service port : %s\n' "$SERVICE_PORT"
+printf ' Certificate  : %s\n' "$PG_CERT_FILE"
+printf ' API Key      : %s\n' "$API_KEY"
+printf '%s\n' "$SEP"
+printf '%s\n' '----- BEGIN CERTIFICATE (select & copy everything below) -----'
+printf '%s%s%s\n' "$ORANGE" "$CERT" "$RESET"
+printf '%s\n' '----- END CERTIFICATE -----'
+printf '%s\n' "$SEP"
+printf '%s\n' '----- API KEY -----'
+printf '%s%s%s\n' "$ORANGE" "$API_KEY" "$RESET"
+printf '%s\n' '----- END API KEY -----'
+printf '%s\n' "$SEP"

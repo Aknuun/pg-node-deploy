@@ -196,6 +196,16 @@ fi
 # Summary - show certificate + API key (copy from the terminal)
 # --------------------------------------------------------------------------
 SEP="======================================================================"
+
+# Orange (256-color if available, otherwise bright yellow fallback).
+if command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null || echo 8)" -ge 256 ]; then
+    ORANGE=$'\033[38;5;208m'
+else
+    ORANGE=$'\033[33m'
+fi
+RESET=$'\033[0m'
+
+# Plain-text copy saved to disk.
 {
     echo "$SEP"
     echo " PasarGuard node installed - INSTALL DONE"
@@ -215,6 +225,21 @@ SEP="======================================================================"
 } > "$INFO_FILE"
 chmod 600 "$INFO_FILE"
 
-cat "$INFO_FILE"
+# Colored terminal output (certificate + API key in orange).
+printf '%s\n' "$SEP"
+printf ' PasarGuard node installed - INSTALL DONE\n'
+printf '%s\n' "$SEP"
+printf ' Service port : %s\n' "$SERVICE_PORT"
+printf ' Certificate  : %s\n' "$PG_CERT_FILE"
+printf ' API Key      : %s\n' "$API_KEY"
+printf '%s\n' "$SEP"
+printf '%s\n' '----- BEGIN CERTIFICATE (select & copy everything below) -----'
+printf '%s%s%s\n' "$ORANGE" "$CERT" "$RESET"
+printf '%s\n' '----- END CERTIFICATE -----'
+printf '%s\n' "$SEP"
+printf '%s\n' '----- API KEY -----'
+printf '%s%s%s\n' "$ORANGE" "$API_KEY" "$RESET"
+printf '%s\n' '----- END API KEY -----'
+printf '%s\n' "$SEP"
 
 ok "All steps finished. A copy of this summary is saved at ${INFO_FILE}."
