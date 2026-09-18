@@ -21,26 +21,11 @@
 
 ---
 
-## افزودن به پنل (یک‌بار تنظیم کن)
+## تنظیم اطلاعات پنل (یک‌بار)
 
-یکی از سه روش زیر را یک‌بار انجام بده؛ بعد از آن هر نصب خودکار در پنل ثبت می‌شود.
+برای اینکه نود بعد از نصب خودکار در پنل ثبت شود، اطلاعات پنل را یک‌بار روی سرور قرار بده.
 
-### روش ۱ (پیشنهادی) — GitHub Actions + Secrets
-
-`Settings → Secrets and variables → Actions`:
-
-| Secret | توضیح | اجباری |
-|---|---|---|
-| `PANEL_URL` | آدرس پنل، مثلاً `https://panel.example.com` | بله |
-| `PANEL_USERNAME` | نام کاربری ادمین پنل | بله |
-| `PANEL_PASSWORD` | رمز ادمین پنل | بله |
-| `PANEL_CORE_CONFIG_ID` | شناسه Core Config (پیش‌فرض `1`) | خیر |
-
-سپس از تب **Actions** ورک‌فلو **Install PasarGuard Node** را اجرا کن و فقط `host` (و در صورت نیاز `instance`) را بده.
-
-> برای **ثبت نود در پنل** به `SSH_PRIVATE_KEY` نیازی نیست. این کلید فقط برای این است که ورک‌فلو از گیت‌هاب روی سرور راه دور SSH بزند؛ اگر نصب را روی خود سرور انجام می‌دهی (روش ۲ یا ۳) اصلاً لازم نیست.
-
-### روش ۲ — فایل کانفیگ روی سرور
+### روش ۱ (پیشنهادی) — فایل کانفیگ روی سرور
 
 ```bash
 sudo install -d -m 700 /etc/pg-node-deploy
@@ -51,23 +36,41 @@ PANEL_PASSWORD=change-me
 EOF
 ```
 
-### روش ۳ — متغیر محیطی (برای یک اجرا)
+یا نمونه را با `wget` دانلود کن و ویرایش کن:
+
+```bash
+sudo install -d -m 700 /etc/pg-node-deploy
+sudo wget -qO /etc/pg-node-deploy/panel.conf \
+  https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/panel.conf.example
+sudo nano /etc/pg-node-deploy/panel.conf
+sudo chmod 600 /etc/pg-node-deploy/panel.conf
+```
+
+### روش ۲ — متغیر محیطی (برای یک اجرا)
 
 ```bash
 sudo PANEL_URL="https://panel.example.com" \
      PANEL_USERNAME="admin" \
      PANEL_PASSWORD='change-me' \
-     bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
+     bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
 ```
 
 ---
 
 ## نصب + افزودن خودکار
 
-بعد از تنظیم یکی از روش‌های بالا:
+بعد از تنظیم اطلاعات پنل:
+
+با **curl**:
 
 ```bash
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
+```
+
+با **wget**:
+
+```bash
+sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
 ```
 
 اگر روی سرور نصب قبلی وجود داشته باشد، همین‌جا می‌پرسد (فقط وقتی ترمینال تعاملی باشد):
@@ -77,7 +80,7 @@ An existing 'pg-node' install was found at /opt/pg-node.
 Press Enter to (re)install on it, or type a new instance name:
 ```
 
-در حالت غیرتعاملی (Actions) به‌صورت پیش‌فرض روی `pg-node` نصب می‌کند؛ برای instance دلخواه `NODE_INSTANCE` را ست کن.
+در اجرای غیرتعاملی (بدون ترمینال) به‌صورت پیش‌فرض روی `pg-node` نصب می‌کند؛ برای instance دلخواه `NODE_INSTANCE` را ست کن.
 
 > در نصب مجدد (Enter روی instance موجود)، سرویس فعلی متوقف می‌شود و همان پورت‌ها، API Key و Certificate حفظ می‌شوند؛ پس ثبت قبلی نود در پنل دست‌نخورده می‌ماند.
 
@@ -88,6 +91,27 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-depl
 # یا برای instance خاص:
 sudo NODE_INSTANCE=fin3 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/register-node.sh)"
 ```
+
+---
+
+## راهنمای دوستان (کپی برداری)
+
+این متن را برای دوستت بفرست؛ فقط کافیست سه مقدار پنل خودش را جایگزین کند:
+
+```bash
+# ۱) اطلاعات پنل خودت را بگذار (سه مقدار زیر را عوض کن)
+sudo install -d -m 700 /etc/pg-node-deploy
+sudo sh -c 'umask 077; cat > /etc/pg-node-deploy/panel.conf' <<'EOF'
+PANEL_URL=https://YOUR-PANEL-URL
+PANEL_USERNAME=YOUR-USERNAME
+PANEL_PASSWORD=YOUR-PASSWORD
+EOF
+
+# ۲) نصب + ثبت خودکار در پنل
+sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
+```
+
+هر نفر فقط مقادیر `PANEL_URL` / `PANEL_USERNAME` / `PANEL_PASSWORD` خودش را می‌گذارد؛ بقیه چیزها خودکار است.
 
 ---
 
@@ -121,15 +145,13 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-depl
 | `register-node.sh` | فقط ثبت نود در پنل با اطلاعات موجود روی سرور |
 | `info.sh` | نمایش IP، پورت‌ها، گواهی و API Key هر instance |
 | `panel.conf.example` | نمونه فایل اطلاعات پنل |
-| `.github/workflows/deploy.yml` | نصب از راه دور روی سرور via GitHub Actions |
 
 ---
 
 ## امنیت
 
-- هرگز `panel.conf` یا رمز پنل را داخل ریپو commit نکن (در `.gitignore` هست).
-- برای اتوماسیون از **GitHub Secrets** استفاده کن.
-- فایل `/etc/pg-node-deploy/panel.conf` با دسترسی `600` و مالک root نگه داشته می‌شود.
+- فایل `/etc/pg-node-deploy/panel.conf` را با دسترسی `600` و مالک root نگه دار.
+- این فایل را جای عمومی آپلود یا داخل گیت‌هاب commit نکن.
 
 ---
 
@@ -143,10 +165,22 @@ Automated PasarGuard `pg-node` + custom Xray installer that also **registers the
 - Reinstalling an existing instance stops its services first and keeps the existing ports, API key and certificate, so the panel entry stays valid.
 - Custom Xray core fixes excessive config-volume usage and disconnects configs as soon as the quota is exhausted.
 
-Configure panel credentials once (GitHub Secrets `PANEL_URL`, `PANEL_USERNAME`, `PANEL_PASSWORD`, optional `PANEL_CORE_CONFIG_ID`), or create `/etc/pg-node-deploy/panel.conf`, then run:
+Create the panel config once:
+
+```bash
+sudo install -d -m 700 /etc/pg-node-deploy
+sudo sh -c 'umask 077; cat > /etc/pg-node-deploy/panel.conf' <<'EOF'
+PANEL_URL=https://panel.example.com
+PANEL_USERNAME=admin
+PANEL_PASSWORD=change-me
+EOF
+```
+
+Then install (curl or wget):
 
 ```bash
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
+sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
 ```
 
 Info: `... info.sh [--instance NAME]` · Register only: `... register-node.sh [--instance NAME]`
