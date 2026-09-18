@@ -42,12 +42,17 @@ jobs:
           username: ${{ inputs.user }}
           port: ${{ inputs.port }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "bootstrap.sh"
+          source: "bootstrap.sh,register-node.sh"
           target: "/tmp/pg-node-deploy"
           overwrite: true
 
       - name: Run install script
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          PANEL_URL: ${{ secrets.PANEL_URL }}
+          PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+          PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+          PANEL_CORE_CONFIG_ID: ${{ secrets.PANEL_CORE_CONFIG_ID }}
         with:
           host: ${{ inputs.host }}
           username: ${{ inputs.user }}
@@ -55,6 +60,20 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           command_timeout: ${{ inputs.timeout }}
           script_stop: true
+          envs: PANEL_URL,PANEL_USERNAME,PANEL_PASSWORD,PANEL_CORE_CONFIG_ID
           script: |
             set -e
+            if [ -n "${PANEL_URL:-}" ] && [ -n "${PANEL_USERNAME:-}" ] && [ -n "${PANEL_PASSWORD:-}" ]; then
+              install -d -m 700 /etc/pg-node-deploy
+              umask 077
+              {
+                printf 'PANEL_URL=%s\n' "$PANEL_URL"
+                printf 'PANEL_USERNAME=%s\n' "$PANEL_USERNAME"
+                printf 'PANEL_PASSWORD=%s\n' "$PANEL_PASSWORD"
+                if [ -n "${PANEL_CORE_CONFIG_ID:-}" ]; then
+                  printf 'PANEL_CORE_CONFIG_ID=%s\n' "$PANEL_CORE_CONFIG_ID"
+                fi
+              } > /etc/pg-node-deploy/panel.conf
+              chmod 600 /etc/pg-node-deploy/panel.conf
+            fi
             sudo bash /tmp/pg-node-deploy/bootstrap.sh

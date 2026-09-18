@@ -1,0 +1,19 @@
+# PasarGuard panel credentials for automatic node registration.
+# Copy this file to /etc/pg-node-deploy/panel.conf and run: chmod 600 <file>
+#
+# bootstrap.sh and register-node.sh read this file automatically,
+# so the node is added to your panel right after installation.
+
+PANEL_URL=https://panel.example.com
+PANEL_USERNAME=admin
+PANEL_PASSWORD=change-me
+
+# ---- optional ----
+# Core config id on the panel (default: 1)
+#PANEL_CORE_CONFIG_ID=1
+# Connection type: grpc (default) or nats
+#PANEL_CONNECTION_TYPE=grpc
+# Name shown in the panel (default: pg-node-<hostname>)
+#NODE_NAME=my-node-1
+# Address the panel uses to reach this node (default: auto-detected public IP)
+#NODE_ADDRESS=203.0.113.10

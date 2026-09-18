@@ -26,6 +26,9 @@ XRAY_DIR="${PG_DATA_DIR}/xray-core"
 XRAY_ZIP_URL="https://github.com/Aknuun/autonode-bot/releases/download/1.0/xray-amd64.zip"
 INSTALLER_URL="https://github.com/PasarGuard/scripts/raw/main/pg-node.sh"
 INFO_FILE="/root/pg-node-info.txt"
+REPO_RAW="https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main"
+REGISTER_SCRIPT_NAME="register-node.sh"
+PANEL_CONF_FILE="${PANEL_CONF_FILE:-/etc/pg-node-deploy/panel.conf}"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -49,9 +52,29 @@ if [ "$(id -u)" -ne 0 ]; then
     die "This script must be run as root (try: sudo bash install.sh)."
 fi
 
+SCRIPT_DIR=""
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+
 WORK_DIR="$(mktemp -d /tmp/pg-node-install.XXXXXX)"
 cleanup() { rm -rf "$WORK_DIR"; }
 trap cleanup EXIT
+
+# True when everything needed to add this node to a panel is available,
+# either through env vars or through the panel config file.
+panel_credentials_available() {
+    if [ -n "${PANEL_URL:-}" ] && [ -n "${PANEL_USERNAME:-}" ] && [ -n "${PANEL_PASSWORD:-}" ]; then
+        return 0
+    fi
+    if [ -f "$PANEL_CONF_FILE" ] \
+        && grep -Eq '^[[:space:]]*PANEL_URL[[:space:]]*=' "$PANEL_CONF_FILE" \
+        && grep -Eq '^[[:space:]]*PANEL_USERNAME[[:space:]]*=' "$PANEL_CONF_FILE" \
+        && grep -Eq '^[[:space:]]*PANEL_PASSWORD[[:space:]]*=' "$PANEL_CONF_FILE"; then
+        return 0
+    fi
+    return 1
+}
 
 # --------------------------------------------------------------------------
 # Port helpers
@@ -252,3 +275,30 @@ printf '%s\n' '----- END API KEY -----'
 printf '%s\n' "$SEP"
 
 ok "All steps finished. A copy of this summary is saved at ${INFO_FILE}."
+
+# --------------------------------------------------------------------------
+# Optional - register this node in the panel
+# --------------------------------------------------------------------------
+if panel_credentials_available; then
+    log "Registering node in the panel..."
+    REGISTER_SCRIPT=""
+    if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/$REGISTER_SCRIPT_NAME" ]; then
+        REGISTER_SCRIPT="$SCRIPT_DIR/$REGISTER_SCRIPT_NAME"
+    else
+        REGISTER_SCRIPT="$WORK_DIR/$REGISTER_SCRIPT_NAME"
+        if ! curl -fsSL "$REPO_RAW/$REGISTER_SCRIPT_NAME" -o "$REGISTER_SCRIPT"; then
+            warn "Could not download ${REGISTER_SCRIPT_NAME}; skipping panel registration."
+            REGISTER_SCRIPT=""
+        fi
+    fi
+    if [ -n "$REGISTER_SCRIPT" ]; then
+        if bash "$REGISTER_SCRIPT"; then
+            ok "Panel registration finished."
+        else
+            warn "Panel registration failed. You can retry later with: sudo bash ${REGISTER_SCRIPT_NAME}"
+        fi
+    fi
+else
+    warn "No panel credentials found (PANEL_URL/PANEL_USERNAME/PANEL_PASSWORD or ${PANEL_CONF_FILE})."
+    warn "Skipping panel registration. Run it later with: sudo bash ${REGISTER_SCRIPT_NAME}"
+fi

@@ -1,0 +1,4 @@
+# Local secrets - never commit these
+panel.conf
+*.conf.local
+*.local
