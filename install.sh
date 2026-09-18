@@ -38,12 +38,15 @@ warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
 
-# Re-exec as root if needed.
+# Re-exec as root if needed. Use BASH_SOURCE so this also works when the
+# script is sourced; never fall back to a bare `bash` (which would drop into
+# an interactive shell when the script came in through a pipe).
 if [ "$(id -u)" -ne 0 ]; then
-    if command -v sudo >/dev/null 2>&1; then
-        exec sudo -E bash "$0" "$@"
+    SELF="${BASH_SOURCE[0]:-}"
+    if [ -n "$SELF" ] && [ -r "$SELF" ] && command -v sudo >/dev/null 2>&1; then
+        exec sudo -E bash "$SELF" "$@"
     fi
-    die "This script must be run as root."
+    die "This script must be run as root (try: sudo bash install.sh)."
 fi
 
 WORK_DIR="$(mktemp -d /tmp/pg-node-install.XXXXXX)"
@@ -163,6 +166,12 @@ cp -f "$WORK_DIR/xray-amd64.zip" "$XRAY_DIR/"
     unzip -o xray-amd64.zip >/dev/null
     if [ -f xray-amd64 ]; then
         mv -f xray-amd64 xray
+    elif [ ! -f xray ]; then
+        # Fall back to whatever single binary the archive shipped.
+        candidate="$(find . -maxdepth 1 -type f -not -name '*.zip' | head -n1)"
+        if [ -n "$candidate" ]; then
+            mv -f "$candidate" xray
+        fi
     fi
     chmod +x xray 2>/dev/null || true
 )
