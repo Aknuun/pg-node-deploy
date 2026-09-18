@@ -195,6 +195,12 @@ fi
 # --------------------------------------------------------------------------
 # Summary - show certificate + API key (copy from the terminal)
 # --------------------------------------------------------------------------
+SERVER_IP="$(curl -4 -s --fail --max-time 5 ifconfig.io 2>/dev/null || curl -6 -s --fail --max-time 5 ifconfig.io 2>/dev/null || true)"
+if [ -z "$SERVER_IP" ]; then
+    SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+fi
+[ -n "$SERVER_IP" ] || SERVER_IP="unknown"
+
 SEP="======================================================================"
 
 # Orange (256-color if available, otherwise bright yellow fallback).
@@ -210,6 +216,7 @@ RESET=$'\033[0m'
     echo "$SEP"
     echo " PasarGuard node installed - INSTALL DONE"
     echo "$SEP"
+    echo " Server IP    : ${SERVER_IP}"
     echo " Service port : ${SERVICE_PORT}"
     echo " Certificate  : ${PG_CERT_FILE}"
     echo " API Key      : ${API_KEY}"
@@ -229,6 +236,8 @@ chmod 600 "$INFO_FILE"
 printf '%s\n' "$SEP"
 printf ' PasarGuard node installed - INSTALL DONE\n'
 printf '%s\n' "$SEP"
+printf ' Server IP    : '
+printf '%s%s%s\n' "$ORANGE" "$SERVER_IP" "$RESET"
 printf ' Service port : %s\n' "$SERVICE_PORT"
 printf ' Certificate  : %s\n' "$PG_CERT_FILE"
 printf ' API Key      : %s\n' "$API_KEY"
