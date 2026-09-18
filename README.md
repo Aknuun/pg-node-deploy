@@ -23,9 +23,49 @@
 
 ## تنظیم اطلاعات پنل (یک‌بار)
 
-برای اینکه نود بعد از نصب خودکار در پنل ثبت شود، اطلاعات پنل را یک‌بار روی سرور قرار بده.
+برای اینکه نود بعد از نصب خودکار در پنل ثبت شود، اطلاعات پنل را یک‌بار در یکی از این سه جا بگذار.
 
-### روش ۱ (پیشنهادی) — فایل کانفیگ روی سرور
+### روش ۱ (پیشنهادی) — ریپوی خصوصی گیت‌هاب + توکن
+
+> ⚠️ **فورک خصوصی از ریپوی عمومی ممکن نیست.** طبق قوانین گیت‌هاب، visibility یک فورک همیشه همان visibility ریپوی اصلی است؛ از یک ریپوی پابلیک فقط فورک پابلیک ساخته می‌شود. پس به‌جای فورک، یک **ریپوی خصوصی جدید** بساز.
+
+**۱) در گیت‌هاب یک ریپوی خصوصی بساز** (مثلاً `pg-node-config`) و در آن فایل `panel.conf` را با این محتوا ایجاد کن:
+
+```ini
+PANEL_URL=https://panel.example.com
+PANEL_USERNAME=admin
+PANEL_PASSWORD=change-me
+```
+
+**۲) یک توکن بساز** از مسیر:
+`Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token`
+- Repository access: فقط همان ریپوی `pg-node-config`
+- Permissions → **Contents: Read-only**
+- Expiration: کوتاه (مثلاً ۷ روز)
+
+**۳) روی سرور، کانفیگ را دانلود کن و نصب را اجرا کن:**
+
+```bash
+# این دو مقدار را عوض کن
+REPO="USERNAME/pg-node-config"
+TOKEN="github_pat_xxxxxxxxxxxx"
+
+sudo install -d -m 700 /etc/pg-node-deploy
+sudo curl -fsSL \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Accept: application/vnd.github.raw" \
+  "https://api.github.com/repos/${REPO}/contents/panel.conf" \
+  -o /etc/pg-node-deploy/panel.conf
+sudo chmod 600 /etc/pg-node-deploy/panel.conf
+
+sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
+```
+
+بعد از دانلود می‌توانی توکن را از گیت‌هاب **Revoke** کنی. اگر می‌خواهی برای سرورهای بعدی هم راحت باشد، توکن را روی سرور نگه دار (مثلاً `/etc/pg-node-deploy/.token` با `chmod 600`).
+
+### روش ۲ — فایل کانفیگ مستقیم روی سرور
+
+بدون هیچ گیت‌هاب و توکنی:
 
 ```bash
 sudo install -d -m 700 /etc/pg-node-deploy
@@ -36,17 +76,7 @@ PANEL_PASSWORD=change-me
 EOF
 ```
 
-یا نمونه را با `wget` دانلود کن و ویرایش کن:
-
-```bash
-sudo install -d -m 700 /etc/pg-node-deploy
-sudo wget -qO /etc/pg-node-deploy/panel.conf \
-  https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/panel.conf.example
-sudo nano /etc/pg-node-deploy/panel.conf
-sudo chmod 600 /etc/pg-node-deploy/panel.conf
-```
-
-### روش ۲ — متغیر محیطی (برای یک اجرا)
+### روش ۳ — متغیر محیطی (برای یک اجرا)
 
 ```bash
 sudo PANEL_URL="https://panel.example.com" \
@@ -59,7 +89,7 @@ sudo PANEL_URL="https://panel.example.com" \
 
 ## نصب + افزودن خودکار
 
-بعد از تنظیم اطلاعات پنل:
+بعد از تنظیم اطلاعات پنل (هر یک از سه روش بالا):
 
 با **curl**:
 
@@ -96,22 +126,51 @@ sudo NODE_INSTANCE=fin3 bash -c "$(curl -fsSL https://raw.githubusercontent.com/
 
 ## راهنمای دوستان (کپی برداری)
 
-این متن را برای دوستت بفرست؛ فقط کافیست سه مقدار پنل خودش را جایگزین کند:
+این متن را برای دوستت بفرست. فقط کافیست طبق مراحل، اطلاعات پنل خودش را در یک ریپوی خصوصی بگذارد و خط آخر را اجرا کند.
+
+**الف) یک‌بار در گیت‌هاب:**
+
+1. یک ریپوی **خصوصی** بساز، مثلاً `pg-node-config`.
+2. فایل `panel.conf` را با اطلاعات پنل خودت بساز:
+
+```ini
+PANEL_URL=https://panel.example.com
+PANEL_USERNAME=admin
+PANEL_PASSWORD=change-me
+```
+
+3. یک **Fine-grained token** بساز با دسترسی فقط روی همین ریپو و `Contents: Read-only`.
+
+**ب) روی سرور:**
 
 ```bash
-# ۱) اطلاعات پنل خودت را بگذار (سه مقدار زیر را عوض کن)
-sudo install -d -m 700 /etc/pg-node-deploy
-sudo sh -c 'umask 077; cat > /etc/pg-node-deploy/panel.conf' <<'EOF'
-PANEL_URL=https://YOUR-PANEL-URL
-PANEL_USERNAME=YOUR-USERNAME
-PANEL_PASSWORD=YOUR-PASSWORD
-EOF
+# مقادیر زیر را عوض کن
+REPO="USERNAME/pg-node-config"
+TOKEN="github_pat_xxxxxxxxxxxx"
 
-# ۲) نصب + ثبت خودکار در پنل
+sudo install -d -m 700 /etc/pg-node-deploy
+sudo curl -fsSL \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Accept: application/vnd.github.raw" \
+  "https://api.github.com/repos/${REPO}/contents/panel.conf" \
+  -o /etc/pg-node-deploy/panel.conf
+sudo chmod 600 /etc/pg-node-deploy/panel.conf
+
 sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
 ```
 
-هر نفر فقط مقادیر `PANEL_URL` / `PANEL_USERNAME` / `PANEL_PASSWORD` خودش را می‌گذارد؛ بقیه چیزها خودکار است.
+اگر ریپوی خصوصی نمی‌خواهی، جای مرحله «الف» همین دستور را بزن:
+
+```bash
+sudo install -d -m 700 /etc/pg-node-deploy
+sudo sh -c 'umask 077; cat > /etc/pg-node-deploy/panel.conf' <<'EOF'
+PANEL_URL=https://YOUR-PANEL
+PANEL_USERNAME=YOUR-USER
+PANEL_PASSWORD=YOUR-PASS
+EOF
+
+sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main/bootstrap.sh)"
+```
 
 ---
 
@@ -151,7 +210,9 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Aknuun/pg-node-depl
 ## امنیت
 
 - فایل `/etc/pg-node-deploy/panel.conf` را با دسترسی `600` و مالک root نگه دار.
-- این فایل را جای عمومی آپلود یا داخل گیت‌هاب commit نکن.
+- این فایل و توکن گیت‌هاب را جای عمومی آپلود یا commit نکن.
+- ریپوی نگه‌داری اطلاعات پنل را **خصوصی** بساز؛ ریپوی عمومی یعنی لو رفتن رمز پنل.
+- توکن را با کمترین دسترسی (`Contents: Read-only`) و کوتاه‌ترین انقضا بساز و در صورت امکان بعد از دانلود Revoke کن.
 
 ---
 
@@ -165,7 +226,17 @@ Automated PasarGuard `pg-node` + custom Xray installer that also **registers the
 - Reinstalling an existing instance stops its services first and keeps the existing ports, API key and certificate, so the panel entry stays valid.
 - Custom Xray core fixes excessive config-volume usage and disconnects configs as soon as the quota is exhausted.
 
-Create the panel config once:
+Panel credentials can live in a **private** GitHub repo (note: a private fork of a public repo is not possible — create a new private repo) and be fetched with a fine-grained token:
+
+```bash
+REPO="USERNAME/pg-node-config"; TOKEN="github_pat_xxx"
+sudo install -d -m 700 /etc/pg-node-deploy
+sudo curl -fsSL -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github.raw" \
+  "https://api.github.com/repos/${REPO}/contents/panel.conf" -o /etc/pg-node-deploy/panel.conf
+sudo chmod 600 /etc/pg-node-deploy/panel.conf
+```
+
+Or create it directly on the server:
 
 ```bash
 sudo install -d -m 700 /etc/pg-node-deploy
