@@ -9,7 +9,7 @@
 ## قابلیت‌ها
 
 - نصب خودکار `pg-node` + هسته سفارشی Xray و نصب `nload`
-- افزودن خودکار نود به پنل با نام `<IP>-<hostname>` (و چند instance روی یک سرور)
+- افزودن خودکار نود به پنل با نام `<IP>-<4حرف-اول-هاست>-<دیتاسنتر>` (مثلاً `178.104.242.27-nure-hetzner`) و چند instance روی یک سرور
 - نگه‌داشتن پورت/API Key/گواهی در نصب مجدد، و انتخاب پورت آزاد در نصب تازه
 - هسته سفارشی این پروژه مصرف بی‌رویه حجم را حل کرده و با تمام‌شدن حجم، کانفیگ سریع قطع می‌شود
 
@@ -63,8 +63,9 @@ Press Enter to (re)install on it, or type a new instance name:
 ```
 
 - `Enter` → همان instance با همان پورت/API Key/گواهی قبلی بازنویسی می‌شود (ثبت قبلی در پنل معتبر می‌ماند).
-- نام جدید → instance جدا ساخته می‌شود و نام نود در پنل `<IP>-<نام>` می‌شود.
+- نام جدید → instance جدا ساخته می‌شود و نام نود در پنل `<IP>-<4حرف>-<دیتاسنتر>-<نام>` می‌شود.
 - در اجرای غیرتعاملی (بدون ترمینال) به‌صورت پیش‌فرض روی `pg-node` نصب می‌کند؛ برای instance دلخواه `NODE_INSTANCE` را ست کن.
+- override دستی دیتاسنتر: `DATACENTER=hetzner` یا داخل `panel.conf` بگذار `DATACENTER=hetzner` (پیش‌فرض: تشخیص خودکار از روی IP با ip-api.com).
 
 اگر بدون اطلاعات پنل نصب کنی، مرحله افزودن به پنل رد می‌شود و بعداً می‌توانی این‌طور ثبت کنی:
 
@@ -95,9 +96,10 @@ sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deplo
 
 ## نام‌گذاری و چند نود روی یک سرور
 
-- نام نود در پنل:
-  - instance پیش‌فرض `pg-node` → `<IP>-<hostname>` (مثلاً `204.168.129.199-fin2`)
-  - instance دلخواه `fin3` → `<IP>-fin3`
+- نام نود در پنل (`IP-4حرف-دیتاسنتر`):
+  - instance پیش‌فرض `pg-node` → `<IP>-<4حرف-اول-هاست>-<دیتاسنتر>` (مثلاً `178.104.242.27-nure-hetzner`)
+  - instance دلخواه `fin3` → `<IP>-<4حرف>-<دیتاسنتر>-fin3` (برای یکتا موندن روی یک سرور)
+  - دیتاسنتر خودکار از روی IP تشخیص داده می‌شود (hetzner, ovh, digitalocean, vultr, ...)، اگر غلط بود `DATACENTER=...` بده.
 - هر instance مسیرهای جدا دارد: `/opt/<name>` ، `/var/lib/<name>` ، سرویس `<name>-service`
 - هسته Xray هم داخل `/var/lib/<name>/xray-core` قرار می‌گیرد
 
@@ -138,7 +140,7 @@ sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/Aknuun/pg-node-deplo
 
 Automated PasarGuard `pg-node` + custom Xray installer that also **registers the node in the panel**.
 
-- Panel node name: `<server-ip>-<hostname>` (or `<server-ip>-<instance>` for a custom instance).
+- Panel node name: `<IP>-<first4-hostname>-<datacenter>` (e.g. `178.104.242.27-nure-hetzner`; custom instance appends `-<instance>`).
 - If `pg-node` is already installed, it asks for Enter (reinstall) or a new instance name.
 - Uses random free ports when 62050/62051 are busy (fresh installs only).
 - Reinstalling an existing instance stops its services first and keeps the existing ports, API key and certificate, so the panel entry stays valid.

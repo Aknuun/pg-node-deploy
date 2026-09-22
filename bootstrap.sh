@@ -45,6 +45,110 @@ envval() {
         | sed -E 's/^[^=]*=//; s/^[[:space:]]+//; s/^["'\'']//; s/["'\'']$//' || true
 }
 
+# --------------------------------------------------------------------------
+# Node-name helpers - format: <IP>-<first4-hostname>-<datacenter>
+# e.g. 178.104.242.27-nure-hetzner
+# Datacenter is auto-detected from the public IP (ip-api.com -> ipinfo.io),
+# override with DATACENTER / NODE_DATACENTER env or panel.conf.
+# --------------------------------------------------------------------------
+slugify() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' \
+        | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-32
+}
+
+normalize_datacenter_name() {
+    local raw="$1" hay
+    hay="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+    case "$hay" in
+        *hetzner*) echo hetzner; return 0 ;;
+        *ovh*) echo ovh; return 0 ;;
+        *digitalocean*|*digital*ocean*) echo digitalocean; return 0 ;;
+        *vultr*|*choopa*|*constant*company*) echo vultr; return 0 ;;
+        *linode*|*akamai*) echo linode; return 0 ;;
+        *contabo*) echo contabo; return 0 ;;
+        *netcup*) echo netcup; return 0 ;;
+        *scaleway*|*online*sas*) echo scaleway; return 0 ;;
+        *amazon*|*aws*) echo aws; return 0 ;;
+        *google*|*gcp*) echo google; return 0 ;;
+        *microsoft*|*azure*) echo azure; return 0 ;;
+        *oracle*|*oci*) echo oracle; return 0 ;;
+        *cloudflare*) echo cloudflare; return 0 ;;
+        *leaseweb*) echo leaseweb; return 0 ;;
+        *serverscom*|*servers.com*) echo serverscom; return 0 ;;
+        *ionos*|*1and1*|*1-1*) echo ionos; return 0 ;;
+        *aeza*) echo aeza; return 0 ;;
+        *selectel*) echo selectel; return 0 ;;
+        *timeweb*) echo timeweb; return 0 ;;
+        *regru*|*reg.ru*) echo regru; return 0 ;;
+        *beget*) echo beget; return 0 ;;
+        *justhost*|*just*host*) echo justhost; return 0 ;;
+        *firstvds*|*first*vds*) echo firstvds; return 0 ;;
+        *alibaba*|*aliyun*) echo alibaba; return 0 ;;
+        *tencent*) echo tencent; return 0 ;;
+        *huawei*) echo huawei; return 0 ;;
+    esac
+    local first
+    first="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | grep -o -E '[a-z0-9]+' | head -n1)"
+    [ -n "$first" ] && { printf '%s\n' "$first"; return 0; }
+    return 1
+}
+
+detect_datacenter() {
+    local ip="${1:-}"
+    local override="${DATACENTER:-${NODE_DATACENTER:-}}"
+    if [ -z "$override" ] && [ -f "${PANEL_CONF_FILE:-/etc/pg-node-deploy/panel.conf}" ]; then
+        override="$(grep -E '^[[:space:]]*(DATACENTER|NODE_DATACENTER)[[:space:]]*=' "${PANEL_CONF_FILE}" 2>/dev/null | head -n1 \
+            | sed -E 's/^[^=]*=//; s/^[[:space:]]+//; s/^["'"'"']//; s/["'"'"']$//; s/^['"'"']//; s/['"'"']$//' || true)"
+    fi
+    if [ -n "$override" ]; then
+        local s
+        s="$(slugify "$override")"
+        [ -n "$s" ] && { printf '%s\n' "$s"; return 0; }
+    fi
+    local raw="" json=""
+    if command -v curl >/dev/null 2>&1 && [ -n "$ip" ] && [ "$ip" != "unknown" ]; then
+        json="$(curl -s --max-time 8 "http://ip-api.com/json/${ip}?fields=status,org,isp,asname" 2>/dev/null || true)"
+        if printf '%s' "$json" | grep -q '"status"[[:space:]]*:[[:space:]]*"success"'; then
+            local org isp asname
+            org="$(printf '%s' "$json" | sed -n 's/.*"org"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+            isp="$(printf '%s' "$json" | sed -n 's/.*"isp"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+            asname="$(printf '%s' "$json" | sed -n 's/.*"asname"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+            raw="${org} ${isp} ${asname}"
+        fi
+        if [ -z "$(printf '%s' "$raw" | tr -d ' ')" ]; then
+            raw="$(curl -s --max-time 8 "https://ipinfo.io/${ip}/org" 2>/dev/null || true)"
+        fi
+    fi
+    if [ -n "$(printf '%s' "$raw" | tr -d '[:space:]')" ]; then
+        local norm
+        if norm="$(normalize_datacenter_name "$raw")" && [ -n "$norm" ]; then
+            slugify "$norm"
+            return 0
+        fi
+    fi
+    printf 'dc\n'
+}
+
+build_node_name() {
+    local ip="$1" instance="$2" default_instance="${3:-pg-node}"
+    local host short dc
+    host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo node)"
+    host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-' | cut -c1-64)"
+    [ -n "$host" ] || host="node"
+    short="$(printf '%s' "$host" | tr -d '-' | cut -c1-4)"
+    [ -n "$short" ] || short="node"
+    dc="$(detect_datacenter "$ip")"
+    [ -n "$dc" ] || dc="dc"
+    if [ "$instance" = "$default_instance" ]; then
+        printf '%s-%s-%s\n' "$ip" "$short" "$dc"
+    else
+        local inst_slug
+        inst_slug="$(slugify "$instance")"
+        [ -n "$inst_slug" ] || inst_slug="$instance"
+        printf '%s-%s-%s-%s\n' "$ip" "$short" "$dc" "$inst_slug"
+    fi
+}
+
 # Re-exec as root if needed. Use BASH_SOURCE so this also works when the
 # script is sourced; never fall back to a bare `bash` (which would drop into
 # an interactive shell when the script came in through a pipe).
@@ -347,14 +451,13 @@ if [ -z "$SERVER_IP" ]; then
 fi
 [ -n "$SERVER_IP" ] || SERVER_IP="unknown"
 
-# Panel node name: <public-ip>-<hostname> for the default instance,
-# <public-ip>-<instance> for a custom one.
-if [ "$INSTANCE" = "$DEFAULT_INSTANCE" ]; then
-    NODE_SUFFIX="$(hostname -s 2>/dev/null || echo "$SERVER_IP")"
-else
-    NODE_SUFFIX="$INSTANCE"
+# Panel node name: <IP>-<first4-hostname>-<datacenter> for the default instance,
+# <IP>-<first4-hostname>-<datacenter>-<instance> for a custom one.
+# e.g. 178.104.242.27-nure-hetzner
+# Respects a pre-set NODE_NAME env var.
+if [ -z "${NODE_NAME:-}" ]; then
+    NODE_NAME="$(build_node_name "$SERVER_IP" "$INSTANCE" "$DEFAULT_INSTANCE")"
 fi
-NODE_NAME="${NODE_NAME:-${SERVER_IP}-${NODE_SUFFIX}}"
 
 SEP="======================================================================"
 
