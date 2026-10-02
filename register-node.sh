@@ -19,6 +19,10 @@
 #                          (default: <IP>-<first4-hostname>-<datacenter>,
 #                           e.g. 178.104.242.27-nure-hetzner;
 #                           custom instance appends -<instance>)
+#   NODE_NAME_SUFFIX       suffix for ip+name mode: final name is
+#                          <IP>-<suffix>[-<instance>] (e.g. 178.104.242.27-myname).
+#                          If neither NODE_NAME nor NODE_NAME_SUFFIX is set and a
+#                          terminal is attached, the script asks interactively.
 #   NODE_ADDRESS           address the panel uses to reach this node
 #                          (default: auto-detected public IP)
 #   DATACENTER / NODE_DATACENTER  override auto-detected datacenter
@@ -269,7 +273,26 @@ if [ -z "${NODE_ADDRESS:-}" ]; then
 fi
 [ -n "$NODE_ADDRESS" ] || die "Could not auto-detect the server IP; pass --node-address."
 
-if [ -z "${NODE_NAME:-}" ]; then
+if [ -z "${NODE_NAME:-}" ] && [ -z "${NODE_NAME_SUFFIX:-}" ] && [ -t 0 ]; then
+    printf 'Panel node name - final format is ip+name, e.g. 178.104.242.27-myname\n' >&2
+    printf 'Enter a name for this node in the panel (Enter = auto): ' >&2
+    read -r NODE_NAME_SUFFIX || true
+fi
+
+if [ -n "${NODE_NAME:-}" ]; then
+    : # explicit full name, keep it
+elif [ -n "${NODE_NAME_SUFFIX:-}" ]; then
+    _suffix="$(slugify "$NODE_NAME_SUFFIX")"
+    [ -n "$_suffix" ] || die "Invalid node name suffix '${NODE_NAME_SUFFIX}'. Use letters/digits/dash."
+    if [ "$NODE_INSTANCE" != "$DEFAULT_INSTANCE" ]; then
+        case "$_suffix" in
+            *-"$NODE_INSTANCE") NODE_NAME="${NODE_ADDRESS}-${_suffix}" ;;
+            *) NODE_NAME="${NODE_ADDRESS}-${_suffix}-$(slugify "$NODE_INSTANCE")" ;;
+        esac
+    else
+        NODE_NAME="${NODE_ADDRESS}-${_suffix}"
+    fi
+else
     NODE_NAME="$(build_node_name "$NODE_ADDRESS" "$NODE_INSTANCE" "$DEFAULT_INSTANCE")"
 fi
 

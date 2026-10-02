@@ -22,7 +22,9 @@ set -Eeuo pipefail
 DEFAULT_INSTANCE="pg-node"
 DEFAULT_PORT="62050"
 DEFAULT_API_PORT="62051"
-XRAY_ZIP_URL="https://github.com/Aknuun/pg-node-deploy/releases/download/xray-26.5.3/xray-amd64.zip"
+XRAY_VERSION="26.6.1"
+XRAY_RELEASE_BASE="https://github.com/Aknuun/pg-node-deploy/releases/download/xray-${XRAY_VERSION}"
+# NOTE: full ZIP URL is built per-arch in Step 4 (xray-amd64.zip / xray-arm64.zip).
 INSTALLER_URL="https://github.com/PasarGuard/scripts/raw/main/pg-node.sh"
 REPO_RAW="https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main"
 REGISTER_SCRIPT_NAME="register-node.sh"
@@ -193,6 +195,20 @@ fi
 
 validate_instance_name "$INSTANCE" \
     || die "Invalid instance name '${INSTANCE}'. Use 1-63 chars: letters, digits, '_' or '-', starting with a letter or digit."
+
+# --------------------------------------------------------------------------
+# Panel node name - ask FIRST so the panel entry is ip+name.
+# Final format: <server-ip>-<name> (custom instance appends -<instance>).
+# Resolution order: NODE_NAME env (full) -> NODE_NAME_SUFFIX env -> interactive
+# prompt (when a terminal is attached) -> auto (<IP>-<host4>-<datacenter>).
+# Non-interactive runs never block: empty suffix means auto.
+# --------------------------------------------------------------------------
+NODE_NAME_SUFFIX="${NODE_NAME_SUFFIX:-}"
+if [ -z "${NODE_NAME:-}" ] && [ -z "$NODE_NAME_SUFFIX" ] && [ -t 0 ]; then
+    printf 'Panel node name - final format is ip+name, e.g. 178.104.242.27-myname\n' >&2
+    printf 'Enter a name for this node in the panel (Enter = auto): ' >&2
+    read -r NODE_NAME_SUFFIX || true
+fi
 
 PG_APP_NAME="$INSTANCE"
 PG_APP_DIR="/opt/${INSTANCE}"
@@ -394,28 +410,51 @@ if [ -f "$PG_CERT_FILE" ]; then
 fi
 
 # --------------------------------------------------------------------------
-# Step 4 - download xray core
+# Step 4 - download xray core (amd64 + arm64)
+# Custom core is built from ImMohammad20000/Xray-core@UserConnTracker
+# (per-user connection tracker: forced disconnect when quota is exhausted).
 # --------------------------------------------------------------------------
 log "Step 4/5 - downloading xray core"
 command -v wget  >/dev/null 2>&1 || { apt-get update -y; apt-get install -y wget; }
 command -v unzip >/dev/null 2>&1 || { apt-get update -y; apt-get install -y unzip; }
 
-wget -q -O "$WORK_DIR/xray-amd64.zip" "$XRAY_ZIP_URL" \
+detect_xray_arch() {
+    local m
+    m="$(uname -m 2>/dev/null || echo unknown)"
+    case "$m" in
+        x86_64|amd64) printf 'amd64\n'; return 0 ;;
+        aarch64|arm64) printf 'arm64\n'; return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+XRAY_ARCH=""
+XRAY_ARCH="$(detect_xray_arch)" \
+    || die "Unsupported CPU architecture '$(uname -m)'. This installer supports x86_64 (amd64) and aarch64 (arm64) only."
+XRAY_ZIP_NAME="xray-${XRAY_ARCH}.zip"
+XRAY_ZIP_URL="${XRAY_RELEASE_BASE}/${XRAY_ZIP_NAME}"
+log "Detected CPU arch: $(uname -m) -> ${XRAY_ARCH}; downloading ${XRAY_ZIP_NAME} (v${XRAY_VERSION})"
+
+wget -q -O "$WORK_DIR/${XRAY_ZIP_NAME}" "$XRAY_ZIP_URL" \
     || die "Failed to download xray core from $XRAY_ZIP_URL"
-ok "Downloaded xray archive."
+ok "Downloaded xray archive (${XRAY_ZIP_NAME})."
 
 # --------------------------------------------------------------------------
 # Step 5 - install xray core and point pg-node at it
 # --------------------------------------------------------------------------
-log "Step 5/5 - installing xray core"
+log "Step 5/5 - installing xray core (${XRAY_ARCH})"
 mkdir -p "$XRAY_DIR"
-cp -f "$WORK_DIR/xray-amd64.zip" "$XRAY_DIR/"
+cp -f "$WORK_DIR/${XRAY_ZIP_NAME}" "$XRAY_DIR/"
 
 (
     cd "$XRAY_DIR"
-    unzip -o xray-amd64.zip >/dev/null
-    if [ -f xray-amd64 ]; then
+    unzip -o "$XRAY_ZIP_NAME" >/dev/null
+    if [ -f "xray-${XRAY_ARCH}" ]; then
+        mv -f "xray-${XRAY_ARCH}" xray
+    elif [ -f xray-amd64 ] && [ "$XRAY_ARCH" = "amd64" ]; then
         mv -f xray-amd64 xray
+    elif [ -f xray-arm64 ] && [ "$XRAY_ARCH" = "arm64" ]; then
+        mv -f xray-arm64 xray
     elif [ ! -f xray ]; then
         # Fall back to whatever single binary the archive shipped.
         candidate="$(find . -maxdepth 1 -type f -not -name '*.zip' | head -n1)"
@@ -451,11 +490,25 @@ if [ -z "$SERVER_IP" ]; then
 fi
 [ -n "$SERVER_IP" ] || SERVER_IP="unknown"
 
-# Panel node name: <IP>-<first4-hostname>-<datacenter> for the default instance,
-# <IP>-<first4-hostname>-<datacenter>-<instance> for a custom one.
-# e.g. 178.104.242.27-nure-hetzner
-# Respects a pre-set NODE_NAME env var.
-if [ -z "${NODE_NAME:-}" ]; then
+# Panel node name: ip+name.
+# - NODE_NAME env (full name) wins as-is.
+# - NODE_NAME_SUFFIX (prompted above or via env) -> <IP>-<suffix>[-<instance>].
+# - empty suffix -> auto <IP>-<first4-hostname>-<datacenter>[-<instance>].
+# e.g. 178.104.242.27-myname
+if [ -n "${NODE_NAME:-}" ]; then
+    : # explicit full name, keep it
+elif [ -n "${NODE_NAME_SUFFIX:-}" ]; then
+    _suffix="$(slugify "$NODE_NAME_SUFFIX")"
+    [ -n "$_suffix" ] || die "Invalid node name suffix '${NODE_NAME_SUFFIX}'. Use letters/digits/dash."
+    if [ "$INSTANCE" != "$DEFAULT_INSTANCE" ]; then
+        case "$_suffix" in
+            *-"$INSTANCE") NODE_NAME="${SERVER_IP}-${_suffix}" ;;
+            *) NODE_NAME="${SERVER_IP}-${_suffix}-$(slugify "$INSTANCE")" ;;
+        esac
+    else
+        NODE_NAME="${SERVER_IP}-${_suffix}"
+    fi
+else
     NODE_NAME="$(build_node_name "$SERVER_IP" "$INSTANCE" "$DEFAULT_INSTANCE")"
 fi
 
