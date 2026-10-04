@@ -6,10 +6,11 @@
 # Steps:
 #   1) apt update
 #   2) configure + lock /etc/resolv.conf
-#   3) install pg-node non-interactively (random free port if 62050/62051 are busy)
-#   4) download the custom xray core
-#   5) install xray core for this instance, point pg-node at it and restart
-#   6) (optional) register the node in the panel
+#   3) tune nf_conntrack (RAM-based max + shorter timeouts, persistent)
+#   4) install pg-node non-interactively (random free port if 62050/62051 are busy)
+#   5) download the custom xray core
+#   6) install xray core for this instance, point pg-node at it and restart
+#   7) (optional) register the node in the panel
 #
 # Run as root:      sudo bash bootstrap.sh
 # Custom instance:  sudo NODE_INSTANCE=fin3 bash bootstrap.sh
@@ -24,7 +25,7 @@ DEFAULT_PORT="62050"
 DEFAULT_API_PORT="62051"
 XRAY_VERSION="26.6.1"
 XRAY_RELEASE_BASE="https://github.com/Aknuun/pg-node-deploy/releases/download/xray-${XRAY_VERSION}"
-# NOTE: full ZIP URL is built per-arch in Step 4 (xray-amd64.zip / xray-arm64.zip).
+# NOTE: full ZIP URL is built per-arch in Step 5 (xray-amd64.zip / xray-arm64.zip).
 INSTALLER_URL="https://github.com/PasarGuard/scripts/raw/main/pg-node.sh"
 REPO_RAW="https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main"
 REGISTER_SCRIPT_NAME="register-node.sh"
@@ -45,6 +46,58 @@ die()  { err "$*"; exit 1; }
 envval() {
     grep -E "^[[:space:]]*$2[[:space:]]*=" "$1" | head -n1 \
         | sed -E 's/^[^=]*=//; s/^[[:space:]]+//; s/^["'\'']//; s/["'\'']$//' || true
+}
+
+# --------------------------------------------------------------------------
+# conntrack tuning - RAM-based nf_conntrack_max + shorter timeouts.
+# Rule: >= 4 GiB RAM -> 524288, 2-4 GiB -> 262144, < 2 GiB -> 131072.
+# Override with CONNTRACK_MAX env (e.g. CONNTRACK_MAX=262144).
+# Applies immediately (sysctl -w) and persists in /etc/sysctl.conf
+# (idempotent: existing keys are replaced, never duplicated).
+# Skipped gracefully on kernels without nf_conntrack.
+# --------------------------------------------------------------------------
+tune_conntrack() {
+    local max="${CONNTRACK_MAX:-}"
+    if [ ! -f /proc/sys/net/netfilter/nf_conntrack_max ]; then
+        warn "nf_conntrack not available in this kernel; skipping conntrack tuning."
+        return 0
+    fi
+    if [ -z "$max" ]; then
+        local mem_kb
+        mem_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+        [ -n "$mem_kb" ] || mem_kb=0
+        if [ "$mem_kb" -ge 4194304 ]; then
+            max=524288
+        elif [ "$mem_kb" -ge 2097152 ]; then
+            max=262144
+        else
+            max=131072
+        fi
+        log "Total RAM: $(( mem_kb / 1024 )) MiB -> nf_conntrack_max=${max}"
+    else
+        log "CONNTRACK_MAX override: ${max}"
+    fi
+    sysctl -w net.netfilter.nf_conntrack_max="$max" >/dev/null || warn "Could not set nf_conntrack_max at runtime."
+    sysctl -w net.netfilter.nf_conntrack_tcp_timeout_established=86400 >/dev/null || warn "Could not set tcp_established timeout."
+    sysctl -w net.netfilter.nf_conntrack_udp_timeout=15 >/dev/null || warn "Could not set udp timeout."
+    sysctl -w net.netfilter.nf_conntrack_udp_timeout_stream=60 >/dev/null || warn "Could not set udp_stream timeout."
+    sysctl -w net.netfilter.nf_conntrack_generic_timeout=300 >/dev/null || warn "Could not set generic timeout."
+    local _k
+    for _k in net.netfilter.nf_conntrack_max \
+               net.netfilter.nf_conntrack_tcp_timeout_established \
+               net.netfilter.nf_conntrack_udp_timeout \
+               net.netfilter.nf_conntrack_udp_timeout_stream \
+               net.netfilter.nf_conntrack_generic_timeout; do
+        sed -i -E "/^[[:space:]]*${_k//./\\.}[[:space:]]*=/d" /etc/sysctl.conf 2>/dev/null || true
+    done
+    cat >> /etc/sysctl.conf <<EOF
+net.netfilter.nf_conntrack_max=${max}
+net.netfilter.nf_conntrack_tcp_timeout_established=86400
+net.netfilter.nf_conntrack_udp_timeout=15
+net.netfilter.nf_conntrack_udp_timeout_stream=60
+net.netfilter.nf_conntrack_generic_timeout=300
+EOF
+    ok "conntrack tuned (max=${max}) and persisted in /etc/sysctl.conf."
 }
 
 # --------------------------------------------------------------------------
@@ -273,7 +326,7 @@ pick_free_port_except() {
 # --------------------------------------------------------------------------
 # Step 1 - apt update
 # --------------------------------------------------------------------------
-log "Step 1/5 - apt update"
+log "Step 1/6 - apt update"
 apt-get update -y || warn "apt-get update reported errors; continuing anyway."
 ok "Package lists updated."
 
@@ -286,7 +339,7 @@ command -v nload >/dev/null 2>&1 && ok "nload is installed." || warn "nload is n
 # --------------------------------------------------------------------------
 # Step 2 - resolv.conf
 # --------------------------------------------------------------------------
-log "Step 2/5 - configuring /etc/resolv.conf"
+log "Step 2/6 - configuring /etc/resolv.conf"
 chattr -i /etc/resolv.conf 2>/dev/null || true
 rm -f /etc/resolv.conf
 printf 'nameserver 94.140.14.15\nnameserver 127.0.0.53\noptions edns0 trust-ad\nsearch .\n' \
@@ -298,9 +351,15 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# Step 3 - install pg-node
+# Step 3 - nf_conntrack tuning (RAM-based max, persistent)
 # --------------------------------------------------------------------------
-log "Step 3/5 - installing PasarGuard node (non-interactive)"
+log "Step 3/6 - tuning nf_conntrack (RAM-based max, persistent)"
+tune_conntrack
+
+# --------------------------------------------------------------------------
+# Step 4 - install pg-node
+# --------------------------------------------------------------------------
+log "Step 4/6 - installing PasarGuard node (non-interactive)"
 
 command -v curl >/dev/null 2>&1 || { apt-get install -y curl; }
 
@@ -414,7 +473,7 @@ fi
 # Custom core is built from ImMohammad20000/Xray-core@UserConnTracker
 # (per-user connection tracker: forced disconnect when quota is exhausted).
 # --------------------------------------------------------------------------
-log "Step 4/5 - downloading xray core"
+log "Step 5/6 - downloading xray core"
 command -v wget  >/dev/null 2>&1 || { apt-get update -y; apt-get install -y wget; }
 command -v unzip >/dev/null 2>&1 || { apt-get update -y; apt-get install -y unzip; }
 
@@ -442,7 +501,7 @@ ok "Downloaded xray archive (${XRAY_ZIP_NAME})."
 # --------------------------------------------------------------------------
 # Step 5 - install xray core and point pg-node at it
 # --------------------------------------------------------------------------
-log "Step 5/5 - installing xray core (${XRAY_ARCH})"
+log "Step 6/6 - installing xray core (${XRAY_ARCH})"
 mkdir -p "$XRAY_DIR"
 cp -f "$WORK_DIR/${XRAY_ZIP_NAME}" "$XRAY_DIR/"
 
