@@ -26,10 +26,19 @@ DEFAULT_API_PORT="62051"
 XRAY_VERSION="26.6.1"
 XRAY_RELEASE_BASE="https://github.com/Aknuun/pg-node-deploy/releases/download/xray-${XRAY_VERSION}"
 # NOTE: full ZIP URL is built per-arch in Step 5 (xray-amd64.zip / xray-arm64.zip).
-INSTALLER_URL="https://github.com/PasarGuard/scripts/raw/main/pg-node.sh"
+# Use raw.githubusercontent.com directly (no github.com -> raw redirect, one less
+# DNS + HTTP hop, more reliable when DNS is flaky).
+INSTALLER_URL="https://raw.githubusercontent.com/PasarGuard/scripts/main/pg-node.sh"
+INSTALLER_URL_FALLBACK="https://github.com/PasarGuard/scripts/raw/main/pg-node.sh"
 REPO_RAW="https://raw.githubusercontent.com/Aknuun/pg-node-deploy/main"
 REGISTER_SCRIPT_NAME="register-node.sh"
 PANEL_CONF_FILE="${PANEL_CONF_FILE:-/etc/pg-node-deploy/panel.conf}"
+# DNS config (Step 2) can be overridden:
+#   SKIP_DNS_CONFIG=1      -> leave /etc/resolv.conf untouched
+#   CUSTOM_DNS="8.8.8.8 1.1.1.1" -> use these nameservers instead of defaults
+#   LOCK_RESOLV_CONF=0     -> don't chattr +i (useful on systems where the lock
+#                             breaks later DHCP/systemd-resolved updates)
+LOCK_RESOLV_CONF="${LOCK_RESOLV_CONF:-1}"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -46,6 +55,131 @@ die()  { err "$*"; exit 1; }
 envval() {
     grep -E "^[[:space:]]*$2[[:space:]]*=" "$1" | head -n1 \
         | sed -E 's/^[^=]*=//; s/^[[:space:]]+//; s/^["'\'']//; s/["'\'']$//' || true
+}
+
+# --------------------------------------------------------------------------
+# DNS helpers - Step 2 must never break name resolution, otherwise Step 4
+# (pg-node.sh downloads its lib/*.sh from github.com) fails with:
+#   curl: (28) Resolving timed out after 5001 milliseconds
+#   Missing shared library: /usr/local/lib/pasarguard-scripts/lib/common.sh
+# Strategy: backup existing resolv.conf, write candidates, verify each with a
+# real DNS lookup for github.com + raw.githubusercontent.com, keep the first
+# working set, and only chattr +i when resolution actually works.
+# --------------------------------------------------------------------------
+dns_resolves() {
+    local host="$1"
+    if command -v getent >/dev/null 2>&1; then
+        getent hosts "$host" >/dev/null 2>&1 && return 0
+    fi
+    # Fallback: quick curl DNS probe (no download).
+    curl -s -o /dev/null --connect-timeout 5 --max-time 8 "https://${host}/" >/dev/null 2>&1 && return 0
+    return 1
+}
+
+github_dns_ok() {
+    dns_resolves "github.com" && dns_resolves "raw.githubusercontent.com"
+}
+
+configure_dns() {
+    if [ "${SKIP_DNS_CONFIG:-0}" = "1" ]; then
+        log "SKIP_DNS_CONFIG=1; leaving /etc/resolv.conf untouched."
+        github_dns_ok || warn "Current DNS cannot resolve github.com; Step 4 may fail."
+        return 0
+    fi
+
+    local candidates=()
+    if [ -n "${CUSTOM_DNS:-}" ]; then
+        # shellcheck disable=SC2206
+        candidates+=(${CUSTOM_DNS})
+    else
+        # Order matters: 94.140.14.15 first, then 1.1.1.3, then the rest.
+        # 127.0.0.53 (systemd stub) is only appended when the system was
+        # using it before (symlink), because it breaks when resolv.conf is
+        # no longer a symlink to /run/systemd/resolve/*.
+        candidates=("94.140.14.15" "1.1.1.3" "8.8.8.8" "1.1.1.1" "9.9.9.9")
+    fi
+
+    # Backup current config so we can roll back if nothing works.
+    local backup=""
+    if [ -f /etc/resolv.conf ]; then
+        backup="$(cat /etc/resolv.conf 2>/dev/null || true)"
+        cp -f /etc/resolv.conf "$WORK_DIR/resolv.conf.bak" 2>/dev/null || true
+    fi
+    # Was it a symlink to systemd-resolved? Remember for the 127.0.0.53 check.
+    local was_stub_symlink=0
+    if [ -L /etc/resolv.conf ]; then
+        case "$(readlink /etc/resolv.conf 2>/dev/null || true)" in
+            *systemd*|*run/systemd/resolve*) was_stub_symlink=1 ;;
+        esac
+    fi
+
+    chattr -i /etc/resolv.conf 2>/dev/null || true
+
+    local ns_list="" ns primary_ok=0
+    # Try: primary alone, primary+secondary, ... first working combo wins.
+    for ns in "${candidates[@]}"; do
+        if [ -z "$ns_list" ]; then
+            ns_list="$ns"
+        else
+            ns_list="$ns_list $ns"
+        fi
+        {
+            for s in $ns_list; do printf 'nameserver %s\n' "$s"; done
+            # Keep systemd stub only when the system was using it before.
+            if [ "$was_stub_symlink" = "1" ]; then
+                printf 'nameserver 127.0.0.53\n'
+            fi
+            printf 'options edns0 trust-ad\nsearch .\n'
+        } > /etc/resolv.conf
+        sleep 1
+        if github_dns_ok; then
+            primary_ok=1
+            ok "DNS verified with nameservers: $(echo $ns_list | tr ' ' ',') (github.com resolves)."
+            break
+        else
+            warn "DNS candidate '${ns_list}' cannot resolve github.com; trying next..."
+        fi
+    done
+
+    if [ "$primary_ok" != "1" ]; then
+        warn "None of the candidate DNS servers resolved github.com."
+        if [ -n "$backup" ]; then
+            printf '%s' "$backup" > /etc/resolv.conf 2>/dev/null || true
+            warn "Restored original /etc/resolv.conf."
+            sleep 1
+            github_dns_ok && ok "Original DNS resolves github.com; continuing with it." || warn "Even original DNS fails; continuing anyway (Step 4 will likely fail)."
+        fi
+        return 0
+    fi
+
+    if [ "$LOCK_RESOLV_CONF" = "1" ]; then
+        if chattr +i /etc/resolv.conf 2>/dev/null; then
+            ok "/etc/resolv.conf written and locked (chattr +i)."
+        else
+            warn "/etc/resolv.conf written, but chattr +i failed (unsupported filesystem?)."
+        fi
+    else
+        ok "/etc/resolv.conf written (lock skipped, LOCK_RESOLV_CONF=0)."
+    fi
+}
+
+# Download helper with retries + IPv4 fallback. Returns non-zero only when
+# every attempt (normal + --ipv4) fails.
+robust_download() {
+    local url="$1" dest="$2"
+    local attempt
+    for attempt in 1 2 3; do
+        if curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 --retry-delay 2 "$url" -o "$dest"; then
+            return 0
+        fi
+        warn "Download attempt ${attempt}/3 failed for ${url}; retrying..."
+        sleep 2
+    done
+    warn "Standard download failed; retrying with --ipv4 for ${url}..."
+    if curl -fsSL --ipv4 --connect-timeout 10 --max-time 60 "$url" -o "$dest"; then
+        return 0
+    fi
+    return 1
 }
 
 # --------------------------------------------------------------------------
@@ -337,18 +471,10 @@ fi
 command -v nload >/dev/null 2>&1 && ok "nload is installed." || warn "nload is not available."
 
 # --------------------------------------------------------------------------
-# Step 2 - resolv.conf
+# Step 2 - resolv.conf (verified, never break DNS)
 # --------------------------------------------------------------------------
 log "Step 2/6 - configuring /etc/resolv.conf"
-chattr -i /etc/resolv.conf 2>/dev/null || true
-rm -f /etc/resolv.conf
-printf 'nameserver 94.140.14.15\nnameserver 127.0.0.53\noptions edns0 trust-ad\nsearch .\n' \
-    | tee /etc/resolv.conf >/dev/null
-if chattr +i /etc/resolv.conf 2>/dev/null; then
-    ok "/etc/resolv.conf written and locked (chattr +i)."
-else
-    warn "/etc/resolv.conf written, but chattr +i failed (unsupported filesystem?)."
-fi
+configure_dns
 
 # --------------------------------------------------------------------------
 # Step 3 - nf_conntrack tuning (RAM-based max, persistent)
@@ -406,8 +532,18 @@ else
 fi
 
 log "Downloading pg-node installer..."
-curl -fsSL "$INSTALLER_URL" -o "$WORK_DIR/pg-node.sh" \
-    || die "Failed to download pg-node installer from $INSTALLER_URL"
+if ! robust_download "$INSTALLER_URL" "$WORK_DIR/pg-node.sh"; then
+    warn "Primary installer URL failed; trying fallback: ${INSTALLER_URL_FALLBACK}"
+    robust_download "$INSTALLER_URL_FALLBACK" "$WORK_DIR/pg-node.sh" \
+        || die "Failed to download pg-node installer from $INSTALLER_URL (DNS or network blocked github.com; check /etc/resolv.conf, try CUSTOM_DNS=\"8.8.8.8 1.1.1.1\" or SKIP_DNS_CONFIG=1)"
+fi
+
+# Pre-flight: pg-node.sh will curl lib/*.sh from github.com with a 5s
+# connect-timeout. Fail early with a clear message instead of the cryptic
+# "Missing shared library: /usr/local/lib/pasarguard-scripts/lib/common.sh".
+if ! github_dns_ok; then
+    die "DNS cannot resolve github.com right now; pg-node installer would fail with 'Resolving timed out / Missing shared library'. Fix DNS (CUSTOM_DNS / SKIP_DNS_CONFIG=1) and retry."
+fi
 
 INSTALL_ARGS=(install -y --service-port "$SERVICE_PORT" --api-port "$API_PORT")
 HIDDEN_CLI=""
@@ -494,8 +630,13 @@ XRAY_ZIP_NAME="xray-${XRAY_ARCH}.zip"
 XRAY_ZIP_URL="${XRAY_RELEASE_BASE}/${XRAY_ZIP_NAME}"
 log "Detected CPU arch: $(uname -m) -> ${XRAY_ARCH}; downloading ${XRAY_ZIP_NAME} (v${XRAY_VERSION})"
 
-wget -q -O "$WORK_DIR/${XRAY_ZIP_NAME}" "$XRAY_ZIP_URL" \
-    || die "Failed to download xray core from $XRAY_ZIP_URL"
+if command -v curl >/dev/null 2>&1; then
+    robust_download "$XRAY_ZIP_URL" "$WORK_DIR/${XRAY_ZIP_NAME}" \
+        || die "Failed to download xray core from $XRAY_ZIP_URL"
+else
+    wget --tries=3 --timeout=30 -O "$WORK_DIR/${XRAY_ZIP_NAME}" "$XRAY_ZIP_URL" \
+        || die "Failed to download xray core from $XRAY_ZIP_URL"
+fi
 ok "Downloaded xray archive (${XRAY_ZIP_NAME})."
 
 # --------------------------------------------------------------------------
@@ -640,7 +781,7 @@ if panel_credentials_available; then
         REGISTER_SCRIPT="$SCRIPT_DIR/$REGISTER_SCRIPT_NAME"
     else
         REGISTER_SCRIPT="$WORK_DIR/$REGISTER_SCRIPT_NAME"
-        if ! curl -fsSL "$REPO_RAW/$REGISTER_SCRIPT_NAME" -o "$REGISTER_SCRIPT"; then
+        if ! robust_download "$REPO_RAW/$REGISTER_SCRIPT_NAME" "$REGISTER_SCRIPT"; then
             warn "Could not download ${REGISTER_SCRIPT_NAME}; skipping panel registration."
             REGISTER_SCRIPT=""
         fi
