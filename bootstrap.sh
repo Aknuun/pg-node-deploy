@@ -80,6 +80,17 @@ github_dns_ok() {
     dns_resolves "github.com" && dns_resolves "raw.githubusercontent.com"
 }
 
+# Warm the resolver cache for the hosts the upstream installer hits with a
+# 5s timeout and no retry (github.com). A cold first lookup is the usual
+# killer: it takes 4-5s on flaky links and trips their --connect-timeout 5.
+warm_github_dns() {
+    local i
+    for i in 1 2 3; do
+        dns_resolves "github.com" || true
+        dns_resolves "raw.githubusercontent.com" || true
+    done
+}
+
 configure_dns() {
     if [ "${SKIP_DNS_CONFIG:-0}" = "1" ]; then
         log "SKIP_DNS_CONFIG=1; leaving /etc/resolv.conf untouched."
@@ -179,6 +190,39 @@ robust_download() {
     if curl -fsSL --ipv4 --connect-timeout 10 --max-time 60 "$url" -o "$dest"; then
         return 0
     fi
+    return 1
+}
+
+# Pre-seed the upstream pg-node.sh shared libraries with our resilient
+# downloader. Upstream re-downloads these on EVERY run with a single
+# `--connect-timeout 5` attempt and dies with "Missing shared library" when
+# DNS flakes — but it KEEPS any existing copy in
+# /usr/local/lib/pasarguard-scripts/lib. Seeding that copy first (from the
+# fast raw.githubusercontent.com host, with retries) makes Step 4 immune to
+# the 5s-timeout flake: worst case the upstream refresh fails and the seeded
+# copy is used.
+preseed_pg_node_libs() {
+    local lib_dir="${1:-/usr/local/lib/pasarguard-scripts/lib}"
+    local libs="common.sh system.sh docker.sh github.sh"
+    local lib ok_count=0
+    mkdir -p "$lib_dir" 2>/dev/null || warn "Cannot create ${lib_dir}; continuing anyway."
+    for lib in $libs; do
+        if robust_download "https://raw.githubusercontent.com/PasarGuard/scripts/main/lib/${lib}" "$lib_dir/$lib.tmp" \
+        || robust_download "https://github.com/PasarGuard/scripts/raw/main/lib/${lib}" "$lib_dir/$lib.tmp"; then
+            mv -f "$lib_dir/$lib.tmp" "$lib_dir/$lib" 2>/dev/null || true
+            chmod 644 "$lib_dir/$lib" 2>/dev/null || true
+        else
+            rm -f "$lib_dir/$lib.tmp" 2>/dev/null || true
+        fi
+        if [ -s "$lib_dir/$lib" ]; then
+            ok_count=$((ok_count + 1))
+        fi
+    done
+    if [ "$ok_count" -eq 4 ]; then
+        ok "Upstream shared libs ready in ${lib_dir} (4/4)."
+        return 0
+    fi
+    warn "Only ${ok_count}/4 upstream shared libs available in ${lib_dir}."
     return 1
 }
 
@@ -545,6 +589,12 @@ if ! github_dns_ok; then
     die "DNS cannot resolve github.com right now; pg-node installer would fail with 'Resolving timed out / Missing shared library'. Fix DNS (CUSTOM_DNS / SKIP_DNS_CONFIG=1) and retry."
 fi
 
+# Seed the upstream libs with our resilient downloader + warm the resolver
+# cache, so the installer's own 5s-timeout download cannot kill the run on
+# flaky DNS (it keeps any existing copy and only dies when genuinely missing).
+warm_github_dns
+preseed_pg_node_libs || warn "Continuing without pre-seeded libs; the installer will attempt its own download."
+
 INSTALL_ARGS=(install -y --service-port "$SERVICE_PORT" --api-port "$API_PORT")
 HIDDEN_CLI=""
 
@@ -570,11 +620,28 @@ if [ "$REINSTALL" = true ]; then
 fi
 
 log "Running pg-node install (instance=${INSTANCE}, service port=${SERVICE_PORT}, api port=${API_PORT})..."
-set +e
-bash "$WORK_DIR/pg-node.sh" "${INSTALL_ARGS[@]}" 2>&1 \
-    | tee "$WORK_DIR/install.log"
-INSTALL_RC="${PIPESTATUS[0]}"
-set -e
+INSTALL_RC=1
+for INSTALL_ATTEMPT in 1 2 3; do
+    set +e
+    bash "$WORK_DIR/pg-node.sh" "${INSTALL_ARGS[@]}" 2>&1 \
+        | tee "$WORK_DIR/install.log"
+    INSTALL_RC="${PIPESTATUS[0]}"
+    set -e
+    if [ "$INSTALL_RC" -eq 0 ]; then
+        break
+    fi
+    # Only this failure is safe to retry: the upstream lib download flaked
+    # on its 5s timeout while DNS recovers. Anything else fails fast below
+    # with the installer log.
+    if grep -q "Missing shared library" "$WORK_DIR/install.log" && [ "$INSTALL_ATTEMPT" -lt 3 ]; then
+        warn "Upstream lib download flaked (attempt ${INSTALL_ATTEMPT}/3); re-warming DNS and retrying..."
+        warm_github_dns
+        preseed_pg_node_libs || true
+        sleep 3
+        continue
+    fi
+    break
+done
 
 # Restore the hidden CLI only if the installer did not recreate it.
 if [ -n "$HIDDEN_CLI" ] && [ -f "${HIDDEN_CLI}.pg-node-deploy.bak" ]; then
