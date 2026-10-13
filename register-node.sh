@@ -328,54 +328,132 @@ rm -f "$LOGIN_FILE"
 ok "Authenticated."
 
 # --------------------------------------------------------------------------
-# Create the node
+# Ensure unique node name - if NODE_NAME already exists on the panel,
+# append/increment a trailing number (name-2, name-3, ...) so the create
+# never collides with the existing node and never fails with 409.
 # --------------------------------------------------------------------------
-BODY="$(jq -n \
-    --arg name "$NODE_NAME" \
-    --arg address "$NODE_ADDRESS" \
-    --arg cert "$CERT" \
-    --arg api_key "$API_KEY" \
-    --arg connection_type "$PANEL_CONNECTION_TYPE" \
-    --argjson port "$SERVICE_PORT" \
-    --argjson api_port "$API_PORT" \
-    --argjson core_config_id "$PANEL_CORE_CONFIG_ID" \
-    '{
-        name: $name,
-        address: $address,
-        port: $port,
-        api_port: $api_port,
-        usage_coefficient: 1,
-        connection_type: $connection_type,
-        server_ca: $cert,
-        keep_alive: 60,
-        core_config_id: $core_config_id,
-        api_key: $api_key
-    }')"
+fetch_existing_node_names() {
+    local _f _code
+    _f="$(mktemp)"
+    _code="$(curl -sS --max-time 15 -o "$_f" -w '%{http_code}' \
+        -H "Authorization: Bearer ${TOKEN}" \
+        "${PANEL_URL}/api/nodes" 2>/dev/null)" || { rm -f "$_f"; return 1; }
+    if [ "$_code" != "200" ]; then rm -f "$_f"; return 1; fi
+    jq -r '
+        (if type == "array" then .
+         elif has("nodes") then (.nodes // [])
+         elif has("items") then (.items // [])
+         elif has("result") then (.result // [])
+         else [] end)
+        | if type == "array" then .[] else empty end
+        | .name // empty
+    ' "$_f" 2>/dev/null
+    local _rc=$?
+    rm -f "$_f"
+    return $_rc
+}
+
+next_numbered_name() {
+    local base="$1"
+    if [[ "$base" =~ ^(.*[^0-9])-([0-9]+)$ ]]; then
+        local stem="${BASH_REMATCH[1]}" num="${BASH_REMATCH[2]}"
+        printf '%s-%s' "$stem" "$((num + 1))"
+    else
+        printf '%s-2' "$base"
+    fi
+}
+
+BASE_NODE_NAME="$NODE_NAME"
+EXISTING_NAMES_FILE="$(mktemp)"
+if EXISTING_NAMES="$(fetch_existing_node_names)"; then
+    printf '%s\n' "$EXISTING_NAMES" > "$EXISTING_NAMES_FILE"
+    if grep -Fxq "$NODE_NAME" "$EXISTING_NAMES_FILE" 2>/dev/null; then
+        ORIG_NAME="$NODE_NAME"
+        for _i in $(seq 1 100); do
+            NODE_NAME="$(next_numbered_name "$NODE_NAME")"
+            if ! grep -Fxq "$NODE_NAME" "$EXISTING_NAMES_FILE" 2>/dev/null; then
+                break
+            fi
+        done
+        if grep -Fxq "$NODE_NAME" "$EXISTING_NAMES_FILE" 2>/dev/null; then
+            NODE_NAME="${BASE_NODE_NAME}-$(date +%s)"
+        fi
+        warn "Name '${ORIG_NAME}' already exists on the panel; using new name '${NODE_NAME}'."
+        log "Registering node '${NODE_NAME}' (${NODE_ADDRESS}:${SERVICE_PORT}, api ${API_PORT}) in ${PANEL_URL}"
+    fi
+else
+    warn "Could not list existing panel nodes; will auto-rename on conflict (HTTP 409) if needed."
+    : > "$EXISTING_NAMES_FILE"
+fi
+
+# --------------------------------------------------------------------------
+# Create the node (with 409 retry: rename and try again)
+# --------------------------------------------------------------------------
+build_node_body() {
+    jq -n \
+        --arg name "$NODE_NAME" \
+        --arg address "$NODE_ADDRESS" \
+        --arg cert "$CERT" \
+        --arg api_key "$API_KEY" \
+        --arg connection_type "$PANEL_CONNECTION_TYPE" \
+        --argjson port "$SERVICE_PORT" \
+        --argjson api_port "$API_PORT" \
+        --argjson core_config_id "$PANEL_CORE_CONFIG_ID" \
+        '{
+            name: $name,
+            address: $address,
+            port: $port,
+            api_port: $api_port,
+            usage_coefficient: 1,
+            connection_type: $connection_type,
+            server_ca: $cert,
+            keep_alive: 60,
+            core_config_id: $core_config_id,
+            api_key: $api_key
+        }'
+}
 
 RESP_FILE="$(mktemp)"
-HTTP_CODE="$(curl -sS --max-time 20 -o "$RESP_FILE" -w '%{http_code}' -X POST "${PANEL_URL}/api/node" \
-    -H "Authorization: Bearer ${TOKEN}" \
-    -H 'Content-Type: application/json' \
-    -d "$BODY" 2>/dev/null)" || { rm -f "$RESP_FILE"; die "Request to ${PANEL_URL}/api/node failed."; }
+ATTEMPT=0
+while true; do
+    ATTEMPT=$((ATTEMPT + 1))
+    BODY="$(build_node_body)"
+    HTTP_CODE="$(curl -sS --max-time 20 -o "$RESP_FILE" -w '%{http_code}' -X POST "${PANEL_URL}/api/node" \
+        -H "Authorization: Bearer ${TOKEN}" \
+        -H 'Content-Type: application/json' \
+        -d "$BODY" 2>/dev/null)" || { rm -f "$RESP_FILE" "$EXISTING_NAMES_FILE"; die "Request to ${PANEL_URL}/api/node failed."; }
 
-case "$HTTP_CODE" in
-    200|201)
-        ok "Node added to the panel successfully."
-        jq -r '"   id: \(.id)   name: \(.name)   status: \(.status // "connecting")"' "$RESP_FILE" 2>/dev/null || true
-        ;;
-    409)
-        warn "A node with the same name/address already exists on the panel (HTTP 409). Skipping."
-        ;;
-    401|403)
-        err "Panel rejected the request (HTTP ${HTTP_CODE}): the admin lacks the 'nodes:create' permission."
-        jq -r '.detail? // empty' "$RESP_FILE" 2>/dev/null || true
-        rm -f "$RESP_FILE"; exit 1
-        ;;
-    *)
-        err "Failed to add the node (HTTP ${HTTP_CODE})."
-        jq -r '.detail? // .' "$RESP_FILE" 2>/dev/null || cat "$RESP_FILE"
-        rm -f "$RESP_FILE"; exit 1
-        ;;
-esac
+    case "$HTTP_CODE" in
+        200|201)
+            ok "Node '${NODE_NAME}' added to the panel successfully."
+            jq -r '"   id: \(.id)   name: \(.name)   status: \(.status // "connecting")"' "$RESP_FILE" 2>/dev/null || true
+            break
+            ;;
+        409)
+            if [ "$ATTEMPT" -ge 20 ]; then
+                rm -f "$RESP_FILE" "$EXISTING_NAMES_FILE"
+                die "Panel keeps reporting HTTP 409 (name conflict) after ${ATTEMPT} renames. Last tried name: '${NODE_NAME}'."
+            fi
+            OLD_TRY="$NODE_NAME"
+            NODE_NAME="$(next_numbered_name "$NODE_NAME")"
+            # Avoid re-trying a name we already know exists.
+            while grep -Fxq "$NODE_NAME" "$EXISTING_NAMES_FILE" 2>/dev/null; do
+                NODE_NAME="$(next_numbered_name "$NODE_NAME")"
+            done
+            warn "Name '${OLD_TRY}' already exists on the panel (HTTP 409); retrying with new name '${NODE_NAME}' (attempt ${ATTEMPT})."
+            continue
+            ;;
+        401|403)
+            err "Panel rejected the request (HTTP ${HTTP_CODE}): the admin lacks the 'nodes:create' permission."
+            jq -r '.detail? // empty' "$RESP_FILE" 2>/dev/null || true
+            rm -f "$RESP_FILE" "$EXISTING_NAMES_FILE"; exit 1
+            ;;
+        *)
+            err "Failed to add the node (HTTP ${HTTP_CODE})."
+            jq -r '.detail? // .' "$RESP_FILE" 2>/dev/null || cat "$RESP_FILE"
+            rm -f "$RESP_FILE" "$EXISTING_NAMES_FILE"; exit 1
+            ;;
+    esac
+done
 
-rm -f "$RESP_FILE"
+rm -f "$RESP_FILE" "$EXISTING_NAMES_FILE"
