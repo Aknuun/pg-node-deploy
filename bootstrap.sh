@@ -6,10 +6,10 @@
 # Steps:
 #   1) apt update
 #   2) configure + lock /etc/resolv.conf
-#   3) tune nf_conntrack (RAM-based max + shorter timeouts, persistent)
+#   3) tune kernel: sysctl.d (tcp_mem/swappiness/file-max) + nf_conntrack
 #   4) install pg-node non-interactively (random free port if 62050/62051 are busy)
 #   5) download the custom xray core
-#   6) install xray core for this instance, point pg-node at it and restart
+#   6) install xray core, disable IPv6, point pg-node at it and restart
 #   7) (optional) register the node in the panel
 #
 # Run as root:      sudo bash bootstrap.sh
@@ -279,6 +279,53 @@ EOF
 }
 
 # --------------------------------------------------------------------------
+# sysctl tuning - written as 09-node-tuning.conf so it loads BEFORE the
+# panel's own files (e.g. zz-backpack.conf, which is loaded last), keeping the
+# panel's aggressive network values (rmem/wmem, somaxconn, netdev_max_backlog,
+# ip_local_port_range, ...). We only set here what the panel does not:
+# tcp_mem, swappiness and file-max.
+# --------------------------------------------------------------------------
+NODE_TUNING_CONF="/etc/sysctl.d/09-node-tuning.conf"
+
+tune_sysctl() {
+    mkdir -p /etc/sysctl.d
+    cat > "$NODE_TUNING_CONF" <<'EOF'
+# Managed by pg-node-deploy - loads before the panel files (09 < 99/zz).
+net.ipv4.tcp_mem = 65536 131072 262144
+vm.swappiness = 10
+fs.file-max = 1048576
+EOF
+    sysctl --system >/dev/null 2>&1 \
+        || sysctl -p "$NODE_TUNING_CONF" >/dev/null 2>&1 \
+        || warn "Could not apply ${NODE_TUNING_CONF}."
+    ok "sysctl tuning written to ${NODE_TUNING_CONF} (tcp_mem, swappiness=10, file-max=1048576)."
+}
+
+# --------------------------------------------------------------------------
+# Disable IPv6 persistently (99zz loads last) so the custom xray core stops
+# emitting IPv6 outbound-route noise (Ip6OutNoRoutes). The node is restarted
+# after this so xray rebinds cleanly.
+# --------------------------------------------------------------------------
+NODE_IPV6_CONF="/etc/sysctl.d/99zz-node-disable-ipv6.conf"
+
+disable_ipv6() {
+    mkdir -p /etc/sysctl.d
+    cat > "$NODE_IPV6_CONF" <<'EOF'
+# Managed by pg-node-deploy - disable IPv6 persistently
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOF
+    sysctl --system >/dev/null 2>&1 || warn "Could not reload sysctl after disabling IPv6."
+    # net.ipv6.conf.all only affects new interfaces; force it on existing ones too.
+    local _f
+    for _f in /proc/sys/net/ipv6/conf/*/disable_ipv6; do
+        [ -w "$_f" ] && echo 1 > "$_f" 2>/dev/null || true
+    done
+    ok "IPv6 disabled (${NODE_IPV6_CONF})."
+}
+
+# --------------------------------------------------------------------------
 # Node-name helpers - format: <IP>-<first4-hostname>-<datacenter>
 # e.g. 178.104.242.27-nure-hetzner
 # Datacenter is auto-detected from the public IP (ip-api.com -> ipinfo.io),
@@ -521,9 +568,10 @@ log "Step 2/6 - configuring /etc/resolv.conf"
 configure_dns
 
 # --------------------------------------------------------------------------
-# Step 3 - nf_conntrack tuning (RAM-based max, persistent)
+# Step 3 - kernel tuning (sysctl + nf_conntrack, persistent)
 # --------------------------------------------------------------------------
-log "Step 3/6 - tuning nf_conntrack (RAM-based max, persistent)"
+log "Step 3/6 - tuning kernel (sysctl + nf_conntrack, persistent)"
+tune_sysctl
 tune_conntrack
 
 # --------------------------------------------------------------------------
@@ -740,6 +788,12 @@ else
     echo "XRAY_EXECUTABLE_PATH=${XRAY_DIR}/xray" >> "$PG_ENV_FILE"
 fi
 ok "XRAY_EXECUTABLE_PATH set to ${XRAY_DIR}/xray"
+
+# --------------------------------------------------------------------------
+# Disable IPv6 (persistent) and restart the node so xray rebinds cleanly.
+# --------------------------------------------------------------------------
+log "Disabling IPv6 (persistent) ..."
+disable_ipv6
 
 if command -v "$PG_APP_NAME" >/dev/null 2>&1; then
     log "Restarting pg-node (no log follow)..."
