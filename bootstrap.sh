@@ -23,7 +23,7 @@ set -Eeuo pipefail
 DEFAULT_INSTANCE="pg-node"
 DEFAULT_PORT="62050"
 DEFAULT_API_PORT="62051"
-XRAY_VERSION="26.6.1"
+XRAY_VERSION="26.10.31"
 XRAY_RELEASE_BASE="https://github.com/Aknuun/pg-node-deploy/releases/download/xray-${XRAY_VERSION}"
 # NOTE: full ZIP URL is built per-arch in Step 5 (xray-amd64.zip / xray-arm64.zip).
 # Use raw.githubusercontent.com directly (no github.com -> raw redirect, one less
