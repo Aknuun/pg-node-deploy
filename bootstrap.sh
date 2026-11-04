@@ -138,9 +138,11 @@ restore_default_dns() {
         systemctl enable --now systemd-resolved >/dev/null 2>&1 || true
         systemctl restart systemd-resolved >/dev/null 2>&1 || true
         ok "DNS restored to the server default (systemd-resolved, 127.0.0.53)."
-    else
+    elif systemctl is-active --quiet systemd-resolved; then
         printf 'nameserver 127.0.0.53\n' > /etc/resolv.conf
-        warn "No systemd-resolved stub found; /etc/resolv.conf set to 127.0.0.53."
+        warn "No systemd-resolved stub file; /etc/resolv.conf set to 127.0.0.53."
+    else
+        warn "No systemd-resolved here and no saved original; leaving /etc/resolv.conf untouched."
     fi
     sleep 1
 }
