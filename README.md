@@ -145,6 +145,7 @@ Automated PasarGuard `pg-node` + custom Xray installer that also **registers the
 - Uses random free ports when 62050/62051 are busy (fresh installs only).
 - Reinstalling an existing instance stops its services first and keeps the existing ports, API key and certificate, so the panel entry stays valid.
 - Custom Xray core fixes excessive config-volume usage and disconnects configs as soon as the quota is exhausted.
+- Interactive run asks, besides the node name: block adult content with a filtered (Family) DNS? and install the custom Xray core? — both default **yes** (`BLOCK_PORN=0` / `INSTALL_CUSTOM_CORE=0` to skip). Declining the core installs the official XTLS release instead.
 
 **Method 1 — env vars (one run):**
 
