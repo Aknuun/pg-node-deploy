@@ -45,6 +45,11 @@ PANEL_CONF_FILE="${PANEL_CONF_FILE:-/etc/pg-node-deploy/panel.conf}"
 #   LOCK_RESOLV_CONF=0     -> don't chattr +i (useful on systems where the lock
 #                             breaks later DHCP/systemd-resolved updates)
 LOCK_RESOLV_CONF="${LOCK_RESOLV_CONF:-1}"
+# Two yes/no questions asked when a terminal is attached (Enter = yes):
+#   BLOCK_PORN=1        -> use a Family DNS set that filters adult content
+#   INSTALL_CUSTOM_CORE=1 -> install the custom core that ships with this repo
+BLOCK_PORN="${BLOCK_PORN:-}"
+INSTALL_CUSTOM_CORE="${INSTALL_CUSTOM_CORE:-}"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -55,6 +60,19 @@ log()  { printf '\033[1;34m[*]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m[+]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
+
+# ask_yn "<question>" [y|n] - coloured yes/no prompt, Enter = default.
+ask_yn() {
+    local q="$1" def="${2:-y}" ans hint
+    if [ "$def" = "y" ]; then hint="Y/n"; else hint="y/N"; fi
+    printf '\033[1;36m[?]\033[0m %s [%s]: ' "$q" "$hint" >&2
+    read -r ans || true
+    ans="${ans:-$def}"
+    case "$ans" in
+        [Yy]*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 die()  { err "$*"; exit 1; }
 
 # envval <file> <KEY> - read a value from a KEY=value file.
@@ -109,13 +127,17 @@ configure_dns() {
         # shellcheck disable=SC2206
         candidates+=(${CUSTOM_DNS})
     else
-        # Order matters: 94.140.14.15 first, then 1.1.1.3, then the rest.
+        # Order matters: Family set that filters adult content first when the
+        # user opted in, otherwise the plain ad-blocking resolvers.
+        if [ "${BLOCK_PORN:-1}" = "1" ]; then
+            candidates=("185.228.168.168" "185.228.169.168" "94.140.14.15" "94.140.15.16" "1.1.1.3" "8.8.8.8")
+        else
+            candidates=("94.140.14.14" "94.140.15.15" "1.1.1.1" "8.8.8.8" "9.9.9.9")
+        fi
         # 127.0.0.53 (systemd stub) is only appended when the system was
         # using it before (symlink), because it breaks when resolv.conf is
         # no longer a symlink to /run/systemd/resolve/*.
-        candidates=("94.140.14.15" "1.1.1.3" "8.8.8.8" "1.1.1.1" "9.9.9.9")
     fi
-
     # Backup current config so we can roll back if nothing works.
     local backup=""
     if [ -f /etc/resolv.conf ]; then
@@ -465,7 +487,7 @@ if [ -z "$INSTANCE" ]; then
     if [ -d "/opt/${DEFAULT_INSTANCE}" ]; then
         if [ -t 0 ]; then
             warn "An existing '${DEFAULT_INSTANCE}' install was found at /opt/${DEFAULT_INSTANCE}."
-            printf '    Press Enter to (re)install on it, or type a new instance name: ' >&2
+            printf '\033[1;36m[?]\033[0m Press Enter to (re)install on it, or type a new instance name: ' >&2
             read -r INSTANCE || true
             [ -n "$INSTANCE" ] || INSTANCE="$DEFAULT_INSTANCE"
         else
@@ -489,9 +511,27 @@ validate_instance_name "$INSTANCE" \
 # --------------------------------------------------------------------------
 NODE_NAME_SUFFIX="${NODE_NAME_SUFFIX:-}"
 if [ -z "${NODE_NAME:-}" ] && [ -z "$NODE_NAME_SUFFIX" ] && [ -t 0 ]; then
-    printf 'Panel node name - final format is ip+name, e.g. 178.104.242.27-myname\n' >&2
-    printf 'Enter a name for this node in the panel (Enter = auto): ' >&2
+    printf '\033[1;36m[?]\033[0m Panel node name - final format is ip+name, e.g. 178.104.242.27-myname\n' >&2
+    printf '\033[1;36m[?]\033[0m Enter a name for this node in the panel (Enter = auto): ' >&2
     read -r NODE_NAME_SUFFIX || true
+fi
+
+# Two extra choices (Enter = yes). Non-interactive runs keep both enabled.
+if [ -t 0 ]; then
+    if [ -z "${BLOCK_PORN:-}" ]; then
+        if ask_yn "Block adult content on this server with a filtered (Family) DNS?" y; then
+            BLOCK_PORN=1
+        else
+            BLOCK_PORN=0
+        fi
+    fi
+    if [ -z "${INSTALL_CUSTOM_CORE:-}" ]; then
+        if ask_yn "Install the custom xray core (per-user connection tracker)?" y; then
+            INSTALL_CUSTOM_CORE=1
+        else
+            INSTALL_CUSTOM_CORE=0
+        fi
+    fi
 fi
 
 PG_APP_NAME="$INSTANCE"
@@ -749,6 +789,14 @@ XRAY_ARCH="$(detect_xray_arch)" \
     || die "Unsupported CPU architecture '$(uname -m)'. This installer supports x86_64 (amd64) and aarch64 (arm64) only."
 XRAY_ZIP_NAME="xray-${XRAY_ARCH}.zip"
 XRAY_ZIP_URL="${XRAY_RELEASE_BASE}/${XRAY_ZIP_NAME}"
+if [ "${INSTALL_CUSTOM_CORE:-1}" != "1" ]; then
+    case "$XRAY_ARCH" in
+        amd64) XRAY_ZIP_NAME="Xray-linux-64.zip" ;;
+        arm64) XRAY_ZIP_NAME="Xray-linux-arm64-v8a.zip" ;;
+    esac
+    XRAY_ZIP_URL="https://github.com/XTLS/Xray-core/releases/latest/download/${XRAY_ZIP_NAME}"
+    log "Custom core declined; using the official Xray-core release."
+fi
 log "Detected CPU arch: $(uname -m) -> ${XRAY_ARCH}; downloading ${XRAY_ZIP_NAME} (${XRAY_VERSION})"
 
 if command -v curl >/dev/null 2>&1; then

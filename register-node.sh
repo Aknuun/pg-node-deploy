@@ -44,6 +44,7 @@ ok()   { printf '\033[1;32m[+]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
+ask()  { printf '\033[1;36m[?]\033[0m %s' "$*" >&2; }
 
 # --------------------------------------------------------------------------
 # Node-name helpers - format: <IP>-<first4-hostname>-<datacenter>
@@ -211,21 +212,21 @@ fi
 # --------------------------------------------------------------------------
 if [ -z "${PANEL_URL:-}" ]; then
     if [ -t 0 ]; then
-        read -r -p "Panel URL (e.g. https://panel.example.com): " PANEL_URL
+        ask "Panel URL (e.g. https://panel.example.com): "; read -r PANEL_URL
     else
         die "PANEL_URL is not set. Define it as an env var, in ${PANEL_CONF_FILE}, or pass --panel-url."
     fi
 fi
 if [ -z "${PANEL_USERNAME:-}" ]; then
     if [ -t 0 ]; then
-        read -r -p "Panel admin username: " PANEL_USERNAME
+        ask "Panel admin username: "; read -r PANEL_USERNAME
     else
         die "PANEL_USERNAME is not set."
     fi
 fi
 if [ -z "${PANEL_PASSWORD:-}" ]; then
     if [ -t 0 ]; then
-        read -r -s -p "Panel admin password: " PANEL_PASSWORD; echo
+        ask "Panel admin password: "; read -r -s PANEL_PASSWORD; echo
     else
         die "PANEL_PASSWORD is not set."
     fi
@@ -274,8 +275,8 @@ fi
 [ -n "$NODE_ADDRESS" ] || die "Could not auto-detect the server IP; pass --node-address."
 
 if [ -z "${NODE_NAME:-}" ] && [ -z "${NODE_NAME_SUFFIX:-}" ] && [ -t 0 ]; then
-    printf 'Panel node name - final format is ip+name, e.g. 178.104.242.27-myname\n' >&2
-    printf 'Enter a name for this node in the panel (Enter = auto): ' >&2
+    ask 'Panel node name - final format is ip+name, e.g. 178.104.242.27-myname'
+    ask 'Enter a name for this node in the panel (Enter = auto): '
     read -r NODE_NAME_SUFFIX || true
 fi
 
