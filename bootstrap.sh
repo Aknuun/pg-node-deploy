@@ -173,9 +173,9 @@ configure_dns() {
         # shellcheck disable=SC2206
         candidates+=(${CUSTOM_DNS})
     else
-        # Family set that filters adult content, then the plain ad-blocking
-        # resolvers as fallback when a server cannot reach CleanBrowsing.
-        candidates=("185.228.168.168" "185.228.169.168" "94.140.14.15" "94.140.15.16" "1.1.1.3" "8.8.8.8")
+        # AdGuard Family (blocks adult content) first, then CleanBrowsing
+        # Family and plain ad-blocking resolvers as fallbacks.
+        candidates=("94.140.14.15" "94.140.15.16" "185.228.168.168" "185.228.169.168" "1.1.1.3" "8.8.8.8")
         # 127.0.0.53 (systemd stub) is only appended when the system was
         # using it before (symlink), because it breaks when resolv.conf is
         # no longer a symlink to /run/systemd/resolve/*.
