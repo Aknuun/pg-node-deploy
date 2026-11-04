@@ -23,8 +23,14 @@ set -Eeuo pipefail
 DEFAULT_INSTANCE="pg-node"
 DEFAULT_PORT="62050"
 DEFAULT_API_PORT="62051"
-XRAY_VERSION="26.10.31"
-XRAY_RELEASE_BASE="https://github.com/Aknuun/pg-node-deploy/releases/download/xray-${XRAY_VERSION}"
+# "latest" = newest release of this repo (assets must be xray-amd64.zip / xray-arm64.zip).
+# Pin an exact version only if you need to freeze the core, e.g. XRAY_VERSION="26.10.31".
+XRAY_VERSION="latest"
+if [ "$XRAY_VERSION" = "latest" ]; then
+    XRAY_RELEASE_BASE="https://github.com/Aknuun/pg-node-deploy/releases/latest/download"
+else
+    XRAY_RELEASE_BASE="https://github.com/Aknuun/pg-node-deploy/releases/download/xray-${XRAY_VERSION}"
+fi
 # NOTE: full ZIP URL is built per-arch in Step 5 (xray-amd64.zip / xray-arm64.zip).
 # Use raw.githubusercontent.com directly (no github.com -> raw redirect, one less
 # DNS + HTTP hop, more reliable when DNS is flaky).
@@ -743,7 +749,7 @@ XRAY_ARCH="$(detect_xray_arch)" \
     || die "Unsupported CPU architecture '$(uname -m)'. This installer supports x86_64 (amd64) and aarch64 (arm64) only."
 XRAY_ZIP_NAME="xray-${XRAY_ARCH}.zip"
 XRAY_ZIP_URL="${XRAY_RELEASE_BASE}/${XRAY_ZIP_NAME}"
-log "Detected CPU arch: $(uname -m) -> ${XRAY_ARCH}; downloading ${XRAY_ZIP_NAME} (v${XRAY_VERSION})"
+log "Detected CPU arch: $(uname -m) -> ${XRAY_ARCH}; downloading ${XRAY_ZIP_NAME} (${XRAY_VERSION})"
 
 if command -v curl >/dev/null 2>&1; then
     robust_download "$XRAY_ZIP_URL" "$WORK_DIR/${XRAY_ZIP_NAME}" \
