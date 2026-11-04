@@ -115,10 +115,49 @@ warm_github_dns() {
     done
 }
 
+# Restore the DNS the server had before this installer touched it: the
+# systemd-resolved stub when available, otherwise a plain 127.0.0.53.
+restore_default_dns() {
+    chattr -i /etc/resolv.conf 2>/dev/null || true
+    # Prefer the copy saved before the first filtered-DNS write (and the
+    # symlink target, when it was a systemd-resolved stub).
+    if [ -s /etc/pg-node-deploy/resolv.conf.orig.link ]; then
+        rm -f /etc/resolv.conf
+        ln -sf "$(cat /etc/pg-node-deploy/resolv.conf.orig.link)" /etc/resolv.conf
+        ok "DNS restored to the original symlink ($(cat /etc/pg-node-deploy/resolv.conf.orig.link))."
+        return 0
+    fi
+    if [ -s /etc/pg-node-deploy/resolv.conf.orig ]; then
+        cp -f /etc/pg-node-deploy/resolv.conf.orig /etc/resolv.conf
+        ok "DNS restored from the copy saved before filtering (/etc/pg-node-deploy/resolv.conf.orig)."
+        return 0
+    fi
+    if [ -e /run/systemd/resolve/stub-resolv.conf ]; then
+        rm -f /etc/resolv.conf
+        ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+        systemctl enable --now systemd-resolved >/dev/null 2>&1 || true
+        systemctl restart systemd-resolved >/dev/null 2>&1 || true
+        ok "DNS restored to the server default (systemd-resolved, 127.0.0.53)."
+    else
+        printf 'nameserver 127.0.0.53\n' > /etc/resolv.conf
+        warn "No systemd-resolved stub found; /etc/resolv.conf set to 127.0.0.53."
+    fi
+    sleep 1
+}
+
 configure_dns() {
     if [ "${SKIP_DNS_CONFIG:-0}" = "1" ]; then
         log "SKIP_DNS_CONFIG=1; leaving /etc/resolv.conf untouched."
         github_dns_ok || warn "Current DNS cannot resolve github.com; Step 4 may fail."
+        return 0
+    fi
+
+    # The user said no to adult-content filtering: drop whatever DNS this
+    # installer wrote earlier and go back to the system default (the
+    # systemd-resolved stub, 127.0.0.53), unless CUSTOM_DNS was given.
+    if [ "${BLOCK_PORN:-1}" = "0" ] && [ -z "${CUSTOM_DNS:-}" ]; then
+        restore_default_dns
+        github_dns_ok || warn "System-default DNS cannot resolve github.com; Step 4 may fail."
         return 0
     fi
 
@@ -127,17 +166,23 @@ configure_dns() {
         # shellcheck disable=SC2206
         candidates+=(${CUSTOM_DNS})
     else
-        # Order matters: Family set that filters adult content first when the
-        # user opted in, otherwise the plain ad-blocking resolvers.
-        if [ "${BLOCK_PORN:-1}" = "1" ]; then
-            candidates=("185.228.168.168" "185.228.169.168" "94.140.14.15" "94.140.15.16" "1.1.1.3" "8.8.8.8")
-        else
-            candidates=("94.140.14.14" "94.140.15.15" "1.1.1.1" "8.8.8.8" "9.9.9.9")
-        fi
+        # Family set that filters adult content, then the plain ad-blocking
+        # resolvers as fallback when a server cannot reach CleanBrowsing.
+        candidates=("185.228.168.168" "185.228.169.168" "94.140.14.15" "94.140.15.16" "1.1.1.3" "8.8.8.8")
         # 127.0.0.53 (systemd stub) is only appended when the system was
         # using it before (symlink), because it breaks when resolv.conf is
         # no longer a symlink to /run/systemd/resolve/*.
     fi
+    # Keep a copy of the untouched config so a later run can undo filtering.
+    install -d -m 700 /etc/pg-node-deploy 2>/dev/null || true
+    if [ ! -e /etc/pg-node-deploy/resolv.conf.orig ] && [ ! -e /etc/pg-node-deploy/resolv.conf.orig.link ]; then
+        if [ -L /etc/resolv.conf ]; then
+            readlink /etc/resolv.conf > /etc/pg-node-deploy/resolv.conf.orig.link 2>/dev/null || true
+        else
+            cp -f /etc/resolv.conf /etc/pg-node-deploy/resolv.conf.orig 2>/dev/null || true
+        fi
+    fi
+
     # Backup current config so we can roll back if nothing works.
     local backup=""
     if [ -f /etc/resolv.conf ]; then
