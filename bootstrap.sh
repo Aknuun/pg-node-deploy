@@ -860,14 +860,11 @@ if [ -f "$PG_CERT_FILE" ]; then
 fi
 
 # --------------------------------------------------------------------------
-# Step 4 - download xray core (amd64 + arm64)
+# Step 4 - xray core
 # Custom core is built from ImMohammad20000/Xray-core@UserConnTracker
 # (per-user connection tracker: forced disconnect when quota is exhausted).
+# Declining it leaves the core that ships with pg-node untouched.
 # --------------------------------------------------------------------------
-log "Step 5/6 - downloading xray core"
-command -v wget  >/dev/null 2>&1 || { apt-get update -y; apt-get install -y wget; }
-command -v unzip >/dev/null 2>&1 || { apt-get update -y; apt-get install -y unzip; }
-
 detect_xray_arch() {
     local m
     m="$(uname -m 2>/dev/null || echo unknown)"
@@ -878,19 +875,23 @@ detect_xray_arch() {
     esac
 }
 
+if [ "${INSTALL_CUSTOM_CORE:-1}" != "1" ]; then
+    log "Step 5/6 - custom core declined; keeping the core that ships with pg-node."
+    # Remove a path left by an earlier custom-core run so the node falls back
+    # to its own default (the env template's /usr/local/bin/xray).
+    if [ -f "$PG_ENV_FILE" ]; then
+        sed -i -E '/^XRAY_EXECUTABLE_PATH *=/d' "$PG_ENV_FILE"
+    fi
+else
+log "Step 5/6 - downloading xray core"
+command -v wget  >/dev/null 2>&1 || { apt-get update -y; apt-get install -y wget; }
+command -v unzip >/dev/null 2>&1 || { apt-get update -y; apt-get install -y unzip; }
+
 XRAY_ARCH=""
 XRAY_ARCH="$(detect_xray_arch)" \
     || die "Unsupported CPU architecture '$(uname -m)'. This installer supports x86_64 (amd64) and aarch64 (arm64) only."
 XRAY_ZIP_NAME="xray-${XRAY_ARCH}.zip"
 XRAY_ZIP_URL="${XRAY_RELEASE_BASE}/${XRAY_ZIP_NAME}"
-if [ "${INSTALL_CUSTOM_CORE:-1}" != "1" ]; then
-    case "$XRAY_ARCH" in
-        amd64) XRAY_ZIP_NAME="Xray-linux-64.zip" ;;
-        arm64) XRAY_ZIP_NAME="Xray-linux-arm64-v8a.zip" ;;
-    esac
-    XRAY_ZIP_URL="https://github.com/XTLS/Xray-core/releases/latest/download/${XRAY_ZIP_NAME}"
-    log "Custom core declined; using the official Xray-core release."
-fi
 log "Detected CPU arch: $(uname -m) -> ${XRAY_ARCH}; downloading ${XRAY_ZIP_NAME} (${XRAY_VERSION})"
 
 if command -v curl >/dev/null 2>&1; then
@@ -930,12 +931,10 @@ cp -f "$WORK_DIR/${XRAY_ZIP_NAME}" "$XRAY_DIR/"
 
 [ -f "$XRAY_DIR/xray" ] || die "xray binary was not found after extraction."
 
-if grep -q '^XRAY_EXECUTABLE_PATH=' "$PG_ENV_FILE"; then
-    sed -i "s|^XRAY_EXECUTABLE_PATH=.*|XRAY_EXECUTABLE_PATH=${XRAY_DIR}/xray|" "$PG_ENV_FILE"
-else
-    echo "XRAY_EXECUTABLE_PATH=${XRAY_DIR}/xray" >> "$PG_ENV_FILE"
-fi
+sed -i -E "s|^#? *XRAY_EXECUTABLE_PATH *=.*|XRAY_EXECUTABLE_PATH=${XRAY_DIR}/xray|" "$PG_ENV_FILE"
+grep -q '^XRAY_EXECUTABLE_PATH=' "$PG_ENV_FILE" || echo "XRAY_EXECUTABLE_PATH=${XRAY_DIR}/xray" >> "$PG_ENV_FILE"
 ok "XRAY_EXECUTABLE_PATH set to ${XRAY_DIR}/xray"
+fi
 
 # --------------------------------------------------------------------------
 # Disable IPv6 (persistent) and restart the node so xray rebinds cleanly.
