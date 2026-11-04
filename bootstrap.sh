@@ -697,7 +697,26 @@ if [ "$REINSTALL" = true ]; then
         "$INSTANCE" down >/dev/null 2>&1 || true
         "$INSTANCE" service-stop >/dev/null 2>&1 || true
     fi
-    sleep 2
+    # Docker needs a moment to release the sockets; the upstream installer
+    # refuses to start while the port is still bound.
+    for _i in $(seq 1 10); do
+        port_in_use "$SERVICE_PORT" || break
+        sleep 2
+    done
+    if port_in_use "$SERVICE_PORT"; then
+        OLD_SERVICE_PORT="$SERVICE_PORT"
+        SERVICE_PORT="$(pick_free_port_except "$API_PORT")" \
+            || die "Service port ${SERVICE_PORT} is still in use and no free port was found."
+        warn "Port ${OLD_SERVICE_PORT} is still busy after stopping the instance; using ${SERVICE_PORT} instead."
+        warn "Update the node port in the panel to ${SERVICE_PORT}."
+    fi
+    if port_in_use "$API_PORT" || [ "$API_PORT" = "$SERVICE_PORT" ]; then
+        OLD_API_PORT="$API_PORT"
+        API_PORT="$(pick_free_port_except "$SERVICE_PORT")" \
+            || die "API port ${API_PORT} is still in use and no free port was found."
+        warn "API port ${OLD_API_PORT} is still busy; using ${API_PORT} instead."
+        warn "Update the node API port in the panel to ${API_PORT}."
+    fi
 else
     if port_in_use "$SERVICE_PORT"; then
         warn "Default port ${DEFAULT_PORT} is already in use; picking a random free port."
@@ -737,6 +756,16 @@ warm_github_dns
 preseed_pg_node_libs || warn "Continuing without pre-seeded libs; the installer will attempt its own download."
 
 INSTALL_ARGS=(install -y --service-port "$SERVICE_PORT" --api-port "$API_PORT")
+
+# Rewrite a port inside INSTALL_ARGS after a retry picked a new one.
+set_install_port() {
+    local key="$1" value="$2" i
+    for i in "${!INSTALL_ARGS[@]}"; do
+        if [ "${INSTALL_ARGS[$i]}" = "--${key}-port" ]; then
+            INSTALL_ARGS[$((i + 1))]="$value"
+        fi
+    done
+}
 HIDDEN_CLI=""
 
 if [ "$INSTANCE" != "$DEFAULT_INSTANCE" ]; then
@@ -780,6 +809,24 @@ for INSTALL_ATTEMPT in 1 2 3; do
         preseed_pg_node_libs || true
         sleep 3
         continue
+    fi
+    # Port got taken between our check and the install (or a docker container
+    # still held it): move to a free port and try again.
+    if grep -q "is already in use" "$WORK_DIR/install.log" && [ "$INSTALL_ATTEMPT" -lt 3 ]; then
+        BUSY_PORT="$(grep -oE 'Port [0-9]+ is already in use' "$WORK_DIR/install.log" | grep -oE '[0-9]+' | head -n1)"
+        if [ "$BUSY_PORT" = "$SERVICE_PORT" ]; then
+            NEW_PORT="$(pick_free_port_except "$API_PORT")" || break
+            warn "Service port ${SERVICE_PORT} was taken during install; retrying with ${NEW_PORT}."
+            SERVICE_PORT="$NEW_PORT"
+            set_install_port service "$NEW_PORT"
+            continue
+        elif [ "$BUSY_PORT" = "$API_PORT" ]; then
+            NEW_PORT="$(pick_free_port_except "$SERVICE_PORT")" || break
+            warn "API port ${API_PORT} was taken during install; retrying with ${NEW_PORT}."
+            API_PORT="$NEW_PORT"
+            set_install_port api "$NEW_PORT"
+            continue
+        fi
     fi
     break
 done
