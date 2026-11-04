@@ -124,6 +124,11 @@ restore_default_dns() {
     if [ -s /etc/pg-node-deploy/resolv.conf.orig.link ]; then
         rm -f /etc/resolv.conf
         ln -sf "$(cat /etc/pg-node-deploy/resolv.conf.orig.link)" /etc/resolv.conf
+        case "$(cat /etc/pg-node-deploy/resolv.conf.orig.link)" in
+            *stub-resolv.conf)
+                # Older runs wrote through the symlink, polluting the stub file.
+                systemctl restart systemd-resolved >/dev/null 2>&1 || true ;;
+        esac
         ok "DNS restored to the original symlink ($(cat /etc/pg-node-deploy/resolv.conf.orig.link))."
         return 0
     fi
@@ -200,6 +205,8 @@ configure_dns() {
     fi
 
     chattr -i /etc/resolv.conf 2>/dev/null || true
+    # Writing through the symlink would overwrite systemd-resolved's stub file.
+    [ -L /etc/resolv.conf ] && rm -f /etc/resolv.conf
 
     local ns_list="" ns primary_ok=0
     # Try: primary alone, primary+secondary, ... first working combo wins.
