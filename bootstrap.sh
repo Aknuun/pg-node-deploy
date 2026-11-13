@@ -51,9 +51,9 @@ LOCK_RESOLV_CONF="${LOCK_RESOLV_CONF:-1}"
 #   INSTALL_CUSTOM_CORE=1 -> install the custom core that ships with this repo
 BLOCK_PORN="${BLOCK_PORN:-}"
 INSTALL_CUSTOM_CORE="${INSTALL_CUSTOM_CORE:-}"
-# ENABLE_BBR=1 -> write /etc/sysctl.d/99-bbr-fq.conf (BBR + fq) in Step 3.
-# Asked in Step 3 when a terminal is attached (Enter = yes); non-interactive
-# runs enable it.
+# ENABLE_BBR=1 -> write /etc/sysctl.d/99-bbr-fq.conf (BBR + fq), applied in Step 3.
+# Asked up front with the other setup questions when a terminal is attached
+# (Enter = yes); non-interactive runs enable it.
 ENABLE_BBR="${ENABLE_BBR:-}"
 
 export DEBIAN_FRONTEND=noninteractive
@@ -606,7 +606,7 @@ if [ -z "${NODE_NAME:-}" ] && [ -z "$NODE_NAME_SUFFIX" ] && [ -t 0 ]; then
     read -r NODE_NAME_SUFFIX || true
 fi
 
-# Two extra choices (Enter = yes). Non-interactive runs keep both enabled.
+# Extra choices (Enter = yes). Non-interactive runs keep all enabled.
 if [ -t 0 ]; then
     if [ -z "${BLOCK_PORN:-}" ]; then
         if ask_yn "Block adult content on this server with a filtered (Family) DNS?" y; then
@@ -620,6 +620,13 @@ if [ -t 0 ]; then
             INSTALL_CUSTOM_CORE=1
         else
             INSTALL_CUSTOM_CORE=0
+        fi
+    fi
+    if [ -z "${ENABLE_BBR:-}" ]; then
+        if ask_yn "Enable BBR + fq (better speed and stability on lossy links)?" y; then
+            ENABLE_BBR=1
+        else
+            ENABLE_BBR=0
         fi
     fi
 fi
@@ -708,13 +715,6 @@ configure_dns
 # --------------------------------------------------------------------------
 log "Step 3/6 - tuning kernel (sysctl + nf_conntrack, persistent)"
 
-if [ -t 0 ] && [ -z "${ENABLE_BBR:-}" ]; then
-    if ask_yn "Enable BBR + fq (better speed and stability on lossy links)?" y; then
-        ENABLE_BBR=1
-    else
-        ENABLE_BBR=0
-    fi
-fi
 if [ "${ENABLE_BBR:-1}" = "1" ]; then
     enable_bbr_fq
 fi
