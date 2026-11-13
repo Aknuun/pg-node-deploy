@@ -12,6 +12,7 @@
 - افزودن خودکار نود به پنل با نام `<IP>-<4حرف-اول-هاست>-<دیتاسنتر>` (مثلاً `178.104.242.27-nure-hetzner`) و چند instance روی یک سرور
 - نگه‌داشتن پورت/API Key/گواهی در نصب مجدد، و انتخاب پورت آزاد در نصب تازه
 - هسته سفارشی این پروژه مصرف بی‌رویه حجم را حل کرده و با تمام‌شدن حجم، کانفیگ سریع قطع می‌شود
+- در مرحله ۳ می‌پرسد که **BBR + fq** فعال شود یا نه — با زدن اینتر (پیش‌فرض) فعال می‌شود؛ برای رد کردن `ENABLE_BBR=0`
 
 ---
 
@@ -145,6 +146,7 @@ Automated PasarGuard `pg-node` + custom Xray installer that also **registers the
 - Uses random free ports when 62050/62051 are busy (fresh installs only).
 - Reinstalling an existing instance stops its services first and keeps the existing ports, API key and certificate, so the panel entry stays valid.
 - Custom Xray core fixes excessive config-volume usage and disconnects configs as soon as the quota is exhausted.
+- In Step 3 it asks whether to enable **BBR + fq** (kernel tuning for lossy/high-latency links) — **Enter = yes**; `ENABLE_BBR=0` skips it.
 - Interactive run asks, besides the node name: block adult content with a filtered (Family) DNS? and install the custom Xray core? — both default **yes**. `BLOCK_PORN=0` removes a previously applied filtered DNS and restores the server default (systemd-resolved stub, 127.0.0.53); `INSTALL_CUSTOM_CORE=0` installs the official XTLS release instead of the custom core.
 
 **Method 1 — env vars (one run):**

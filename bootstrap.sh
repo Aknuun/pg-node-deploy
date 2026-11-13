@@ -7,6 +7,7 @@
 #   1) apt update
 #   2) configure + lock /etc/resolv.conf
 #   3) tune kernel: sysctl.d (tcp_mem/swappiness/file-max) + nf_conntrack
+#      (+ optional BBR congestion control / fq qdisc, asked here, Enter = yes)
 #   4) install pg-node non-interactively (random free port if 62050/62051 are busy)
 #   5) download the custom xray core
 #   6) install xray core, disable IPv6, point pg-node at it and restart
@@ -50,6 +51,10 @@ LOCK_RESOLV_CONF="${LOCK_RESOLV_CONF:-1}"
 #   INSTALL_CUSTOM_CORE=1 -> install the custom core that ships with this repo
 BLOCK_PORN="${BLOCK_PORN:-}"
 INSTALL_CUSTOM_CORE="${INSTALL_CUSTOM_CORE:-}"
+# ENABLE_BBR=1 -> write /etc/sysctl.d/99-bbr-fq.conf (BBR + fq) in Step 3.
+# Asked in Step 3 when a terminal is attached (Enter = yes); non-interactive
+# runs enable it.
+ENABLE_BBR="${ENABLE_BBR:-}"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -384,6 +389,37 @@ EOF
 }
 
 # --------------------------------------------------------------------------
+# BBR + fq (Step 3, optional) - keeps throughput through partial packet loss
+# and removes bufferbloat, which is what makes new sessions lag on lossy Iran
+# <-> Europe paths. Enter = yes in the prompt; ENABLE_BBR=0 skips it.
+# --------------------------------------------------------------------------
+BBR_CONF="/etc/sysctl.d/99-bbr-fq.conf"
+
+enable_bbr_fq() {
+    mkdir -p /etc/sysctl.d
+    if ! cat > "$BBR_CONF" <<'EOF'
+# Managed by pg-node-deploy - BBR congestion control + fq qdisc
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF
+    then
+        warn "Could not write ${BBR_CONF}; BBR will not survive a reboot."
+    fi
+    sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1 \
+        || warn "Could not set net.core.default_qdisc=fq."
+    sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1 \
+        || warn "Could not set net.ipv4.tcp_congestion_control=bbr."
+    local cc qd
+    cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+    qd="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
+    if [ "$cc" = "bbr" ]; then
+        ok "BBR enabled (qdisc=${qd:-unknown}), persisted in ${BBR_CONF}."
+    else
+        warn "BBR is not active (current: ${cc:-unknown}); this kernel may not support it."
+    fi
+}
+
+# --------------------------------------------------------------------------
 # Disable IPv6 persistently (99zz loads last) so the custom xray core stops
 # emitting IPv6 outbound-route noise (Ip6OutNoRoutes). The node is restarted
 # after this so xray rebinds cleanly.
@@ -671,6 +707,18 @@ configure_dns
 # Step 3 - kernel tuning (sysctl + nf_conntrack, persistent)
 # --------------------------------------------------------------------------
 log "Step 3/6 - tuning kernel (sysctl + nf_conntrack, persistent)"
+
+if [ -t 0 ] && [ -z "${ENABLE_BBR:-}" ]; then
+    if ask_yn "Enable BBR + fq (better speed and stability on lossy links)?" y; then
+        ENABLE_BBR=1
+    else
+        ENABLE_BBR=0
+    fi
+fi
+if [ "${ENABLE_BBR:-1}" = "1" ]; then
+    enable_bbr_fq
+fi
+
 tune_sysctl
 tune_conntrack
 
