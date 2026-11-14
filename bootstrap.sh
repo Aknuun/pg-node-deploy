@@ -71,11 +71,12 @@ ok()   { printf '\033[1;32m[+]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
 
-# ask_yn "<question>" [y|n] - coloured yes/no prompt, Enter = default.
+# ask_yn "<question>" [y|n] [colour] - coloured yes/no prompt, Enter = default.
+# colour is an ANSI code (35 magenta, 34 blue, 36 cyan, 33 yellow, 32 green).
 ask_yn() {
-    local q="$1" def="${2:-y}" ans hint
+    local q="$1" def="${2:-y}" colour="${3:-36}" ans hint
     if [ "$def" = "y" ]; then hint="Y/n"; else hint="y/N"; fi
-    printf '\033[1;36m[?]\033[0m %s [%s]: ' "$q" "$hint" >&2
+    printf '\033[1;%sm[?]\033[0m %s [%s]: ' "$colour" "$q" "$hint" >&2
     read -r ans || true
     ans="${ans:-$def}"
     case "$ans" in
@@ -650,10 +651,24 @@ validate_instance_name "$INSTANCE" \
     || die "Invalid instance name '${INSTANCE}'. Use 1-63 chars: letters, digits, '_' or '-', starting with a letter or digit."
 
 # --------------------------------------------------------------------------
-# Swap - asked before anything else (Enter = yes). Sized from RAM (2G..8G).
+# Panel node name - asked FIRST so the panel entry is ip+name.
+# Final format: <server-ip>-<name> (custom instance appends -<instance>).
+# Resolution order: NODE_NAME env (full) -> NODE_NAME_SUFFIX env -> interactive
+# prompt (when a terminal is attached) -> auto (<IP>-<host4>-<datacenter>).
+# Non-interactive runs never block: empty suffix means auto.
+# --------------------------------------------------------------------------
+NODE_NAME_SUFFIX="${NODE_NAME_SUFFIX:-}"
+if [ -z "${NODE_NAME:-}" ] && [ -z "$NODE_NAME_SUFFIX" ] && [ -t 0 ]; then
+    printf '\033[1;35m[?]\033[0m Panel node name - final format is ip+name, e.g. 178.104.242.27-myname\n' >&2
+    printf '\033[1;35m[?]\033[0m Enter a name for this node in the panel (Enter = auto): ' >&2
+    read -r NODE_NAME_SUFFIX || true
+fi
+
+# --------------------------------------------------------------------------
+# Swap - asked right after the node name (Enter = yes). Sized from RAM (2G..8G).
 # --------------------------------------------------------------------------
 if [ -t 0 ] && [ -z "${ENABLE_SWAP:-}" ]; then
-    if ask_yn "Create a swap file sized to this server's RAM ($(swap_size_mb)M)?" y; then
+    if ask_yn "Create a swap file sized to this server's RAM ($(swap_size_mb)M)?" y 34; then
         ENABLE_SWAP=1
     else
         ENABLE_SWAP=0
@@ -663,38 +678,24 @@ if [ "${ENABLE_SWAP:-0}" = "1" ]; then
     enable_swap
 fi
 
-# --------------------------------------------------------------------------
-# Panel node name - ask FIRST so the panel entry is ip+name.
-# Final format: <server-ip>-<name> (custom instance appends -<instance>).
-# Resolution order: NODE_NAME env (full) -> NODE_NAME_SUFFIX env -> interactive
-# prompt (when a terminal is attached) -> auto (<IP>-<host4>-<datacenter>).
-# Non-interactive runs never block: empty suffix means auto.
-# --------------------------------------------------------------------------
-NODE_NAME_SUFFIX="${NODE_NAME_SUFFIX:-}"
-if [ -z "${NODE_NAME:-}" ] && [ -z "$NODE_NAME_SUFFIX" ] && [ -t 0 ]; then
-    printf '\033[1;36m[?]\033[0m Panel node name - final format is ip+name, e.g. 178.104.242.27-myname\n' >&2
-    printf '\033[1;36m[?]\033[0m Enter a name for this node in the panel (Enter = auto): ' >&2
-    read -r NODE_NAME_SUFFIX || true
-fi
-
 # Extra choices (Enter = yes). Non-interactive runs keep all enabled.
 if [ -t 0 ]; then
     if [ -z "${BLOCK_PORN:-}" ]; then
-        if ask_yn "Block adult content on this server with a filtered (Family) DNS?" y; then
+        if ask_yn "Block adult content on this server with a filtered (Family) DNS?" y 36; then
             BLOCK_PORN=1
         else
             BLOCK_PORN=0
         fi
     fi
     if [ -z "${INSTALL_CUSTOM_CORE:-}" ]; then
-        if ask_yn "Install the custom xray core (per-user connection tracker)?" y; then
+        if ask_yn "Install the custom xray core (per-user connection tracker)?" y 33; then
             INSTALL_CUSTOM_CORE=1
         else
             INSTALL_CUSTOM_CORE=0
         fi
     fi
     if [ -z "${ENABLE_BBR:-}" ]; then
-        if ask_yn "Enable BBR + fq (better speed and stability on lossy links)?" y; then
+        if ask_yn "Enable BBR + fq (better speed and stability on lossy links)?" y 32; then
             ENABLE_BBR=1
         else
             ENABLE_BBR=0
