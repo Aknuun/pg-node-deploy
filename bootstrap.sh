@@ -4,6 +4,7 @@
 # including automatic registration of the node in a PasarGuard panel.
 #
 # Steps:
+#   0) optional swap file sized from RAM (asked first, Enter = yes)
 #   1) apt update
 #   2) configure + lock /etc/resolv.conf
 #   3) tune kernel: sysctl.d (tcp_mem/swappiness/file-max) + nf_conntrack
@@ -46,11 +47,15 @@ PANEL_CONF_FILE="${PANEL_CONF_FILE:-/etc/pg-node-deploy/panel.conf}"
 #   LOCK_RESOLV_CONF=0     -> don't chattr +i (useful on systems where the lock
 #                             breaks later DHCP/systemd-resolved updates)
 LOCK_RESOLV_CONF="${LOCK_RESOLV_CONF:-1}"
-# Two yes/no questions asked when a terminal is attached (Enter = yes):
+# Questions asked when a terminal is attached (Enter = yes):
+#   ENABLE_SWAP=1       -> create a swap file sized to this server's RAM
 #   BLOCK_PORN=1        -> use a Family DNS set that filters adult content
 #   INSTALL_CUSTOM_CORE=1 -> install the custom core that ships with this repo
 BLOCK_PORN="${BLOCK_PORN:-}"
 INSTALL_CUSTOM_CORE="${INSTALL_CUSTOM_CORE:-}"
+# ENABLE_SWAP=1 -> create /swapfile sized from RAM (2G..8G), asked first when a
+# terminal is attached. Non-interactive runs leave swap alone.
+ENABLE_SWAP="${ENABLE_SWAP:-}"
 # ENABLE_BBR=1 -> write /etc/sysctl.d/99-bbr-fq.conf (BBR + fq), applied in Step 3.
 # Asked up front with the other setup questions when a terminal is attached
 # (Enter = yes); non-interactive runs enable it.
@@ -79,6 +84,58 @@ ask_yn() {
     esac
 }
 die()  { err "$*"; exit 1; }
+
+# --------------------------------------------------------------------------
+# Swap helpers - size follows RAM: equal to RAM, clamped to 2G..8G.
+# --------------------------------------------------------------------------
+SWAP_FILE="/swapfile"
+
+swap_size_mb() {
+    local ram_mb mb
+    ram_mb=$(( $(awk '/^MemTotal:/{print $2}' /proc/meminfo) / 1024 ))
+    mb=$ram_mb
+    [ "$mb" -lt 2048 ] && mb=2048
+    [ "$mb" -gt 8192 ] && mb=8192
+    printf '%s\n' "$mb"
+}
+
+# enable_swap - create + mount SWAP_FILE and persist it in /etc/fstab.
+# Never fails the install: every problem is a warning.
+enable_swap() {
+    local mb avail_mb
+    mb="$(swap_size_mb)"
+    if swapon --show --noheadings 2>/dev/null | grep -q .; then
+        ok "Swap is already enabled; leaving it as is."
+        return 0
+    fi
+    if [ -e "$SWAP_FILE" ]; then
+        warn "${SWAP_FILE} already exists but is not active; skipping swap creation."
+        return 0
+    fi
+    avail_mb="$(df -Pm / | awk 'NR==2{print $4}')"
+    if [ "${avail_mb:-0}" -lt $((mb + 1024)) ]; then
+        warn "Not enough free disk for ${mb}M swap (${avail_mb:-0}M free); skipping."
+        return 0
+    fi
+    if ! fallocate -l "${mb}M" "$SWAP_FILE" 2>/dev/null; then
+        dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$mb" status=none 2>/dev/null || {
+            warn "Could not create ${SWAP_FILE}."
+            rm -f "$SWAP_FILE"
+            return 0
+        }
+    fi
+    chmod 600 "$SWAP_FILE"
+    if ! mkswap "$SWAP_FILE" >/dev/null 2>&1 || ! swapon "$SWAP_FILE" 2>/dev/null; then
+        warn "Could not activate swap on ${SWAP_FILE}; removing it."
+        rm -f "$SWAP_FILE"
+        return 0
+    fi
+    ok "Swap enabled: ${mb}M at ${SWAP_FILE}."
+    if ! grep -qE "^${SWAP_FILE}[[:space:]]" /etc/fstab 2>/dev/null; then
+        printf '%s none swap sw 0 0\n' "$SWAP_FILE" >> /etc/fstab 2>/dev/null \
+            || warn "Could not add ${SWAP_FILE} to /etc/fstab; swap will not survive a reboot."
+    fi
+}
 
 # envval <file> <KEY> - read a value from a KEY=value file.
 envval() {
@@ -591,6 +648,20 @@ fi
 
 validate_instance_name "$INSTANCE" \
     || die "Invalid instance name '${INSTANCE}'. Use 1-63 chars: letters, digits, '_' or '-', starting with a letter or digit."
+
+# --------------------------------------------------------------------------
+# Swap - asked before anything else (Enter = yes). Sized from RAM (2G..8G).
+# --------------------------------------------------------------------------
+if [ -t 0 ] && [ -z "${ENABLE_SWAP:-}" ]; then
+    if ask_yn "Create a swap file sized to this server's RAM ($(swap_size_mb)M)?" y; then
+        ENABLE_SWAP=1
+    else
+        ENABLE_SWAP=0
+    fi
+fi
+if [ "${ENABLE_SWAP:-0}" = "1" ]; then
+    enable_swap
+fi
 
 # --------------------------------------------------------------------------
 # Panel node name - ask FIRST so the panel entry is ip+name.

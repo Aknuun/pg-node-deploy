@@ -12,6 +12,7 @@
 - افزودن خودکار نود به پنل با نام `<IP>-<4حرف-اول-هاست>-<دیتاسنتر>` (مثلاً `178.104.242.27-nure-hetzner`) و چند instance روی یک سرور
 - نگه‌داشتن پورت/API Key/گواهی در نصب مجدد، و انتخاب پورت آزاد در نصب تازه
 - هسته سفارشی این پروژه مصرف بی‌رویه حجم را حل کرده و با تمام‌شدن حجم، کانفیگ سریع قطع می‌شود
+- در ابتدای نصب (پیش از هر سؤالی) می‌پرسد که **فایل سواپ** متناسب با رم سرور ساخته شود یا نه — با زدن اینتر (پیش‌فرض) ساخته می‌شود (برابر رم، حداقل ۲ و حداکثر ۸ گیگ) و در `/etc/fstab` ثبت می‌گردد؛ برای رد کردن `ENABLE_SWAP=0`
 - در ابتدای نصب (همراه بقیه سؤال‌ها) می‌پرسد که **BBR + fq** فعال شود یا نه — با زدن اینتر (پیش‌فرض) فعال می‌شود و در مرحله ۳ اعمال می‌گردد؛ برای رد کردن `ENABLE_BBR=0`
 
 ---
@@ -146,6 +147,7 @@ Automated PasarGuard `pg-node` + custom Xray installer that also **registers the
 - Uses random free ports when 62050/62051 are busy (fresh installs only).
 - Reinstalling an existing instance stops its services first and keeps the existing ports, API key and certificate, so the panel entry stays valid.
 - Custom Xray core fixes excessive config-volume usage and disconnects configs as soon as the quota is exhausted.
+- It asks up front (before anything else) whether to create a **swap file sized to the server's RAM** — **Enter = yes** (equal to RAM, min 2G, max 8G, saved in `/etc/fstab`); `ENABLE_SWAP=0` skips it
 - It asks up front (with the other setup questions) whether to enable **BBR + fq** (kernel tuning for lossy/high-latency links) — **Enter = yes**, applied in Step 3; `ENABLE_BBR=0` skips it.
 - Interactive run asks, besides the node name: block adult content with a filtered (Family) DNS? and install the custom Xray core? — both default **yes**. `BLOCK_PORN=0` removes a previously applied filtered DNS and restores the server default (systemd-resolved stub, 127.0.0.53); `INSTALL_CUSTOM_CORE=0` installs the official XTLS release instead of the custom core.
 
