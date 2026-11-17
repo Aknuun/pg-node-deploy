@@ -157,6 +157,34 @@ t() {
         fa:done)         s="نصب نود PasarGuard تمام شد" ;;
         fa:health)       s="بررسی سلامت نصب" ;;
         fa:uninstall_q)  s="حذف کامل این نود؟ نام نمونه را تایپ کن (%s): " ;;
+        fa:mode_q)       s="نصب مستقیم شروع شود؟ (n = ورود به محیط CLI برای تغییر قابلیت‌ها)" ;;
+        fa:cli_title)    s="محیط CLI - تنظیم قابلیت‌ها" ;;
+        fa:cli_pick)     s="یک گزینه انتخاب کن" ;;
+        fa:cli_dns)      s="فیلتر DNS (محتوای بزرگسال)" ;;
+        fa:cli_zram)     s="سواپ فشرده zram" ;;
+        fa:cli_swap)     s="فایل سواپ" ;;
+        fa:cli_bbr)      s="BBR + fq" ;;
+        fa:cli_core)     s="نوع کر xray" ;;
+        fa:cli_list)     s="نمایش نودهای نصب‌شده" ;;
+        fa:cli_rm)       s="حذف یک نود نصب‌شده" ;;
+        fa:cli_start)    s="شروع نصب با این تنظیمات" ;;
+        fa:cli_exit)     s="خروج" ;;
+        fa:on_off)       s="روشن" ;;
+        fa:off)          s="خاموش" ;;
+        en:mode_q)       s="Start the install directly? (n = open the CLI to customise)" ;;
+        en:cli_title)    s="CLI - customise this install" ;;
+        en:cli_pick)     s="Pick an option" ;;
+        en:cli_dns)      s="Filtered DNS (block adult content)" ;;
+        en:cli_zram)     s="zram compressed swap" ;;
+        en:cli_swap)     s="swap file" ;;
+        en:cli_bbr)      s="BBR + fq" ;;
+        en:cli_core)     s="xray core type" ;;
+        en:cli_list)     s="list installed nodes" ;;
+        en:cli_rm)       s="remove an installed node" ;;
+        en:cli_start)    s="start the install with these settings" ;;
+        en:cli_exit)     s="exit" ;;
+        en:on_off)       s="on" ;;
+        en:off)          s="off" ;;
         en:node_name_q)  s="Panel node name (final format ip+name, Enter = auto): " ;;
         en:swap_q)       s="Create a swap file sized to this server's RAM (%sM)?" ;;
         en:zram_q)       s="Also add compressed swap in RAM (zram)?" ;;
@@ -445,6 +473,98 @@ do_uninstall() {
     systemctl daemon-reload 2>/dev/null || true
     ok "Instance '${inst}' removed."
     warn "Any leftover container (e.g. 'node') was not touched on purpose - check with: docker ps"
+}
+
+# --------------------------------------------------------------------------
+# CLI mode - opened when the first question ("install directly?") is answered n.
+# Lets the operator change the optional features (applied right away where it
+# makes sense) or look after already installed nodes before the install runs.
+# --------------------------------------------------------------------------
+instance_names() {
+    local d
+    for d in /opt/*/; do
+        [ -f "${d}.env" ] || continue
+        basename "$d"
+    done
+}
+
+list_instances() {
+    local n any=0 state
+    for n in $(instance_names); do
+        any=1
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "^(${n}|node)$"; then state=up; else state=down; fi
+        printf '  %-18s %s\n' "$n" "$state"
+    done
+    [ "$any" = 1 ] || printf '  (none)\n'
+}
+
+disable_zram() {
+    systemctl disable --now zram-swap >/dev/null 2>&1 || true
+    local d
+    for d in /sys/block/zram*; do
+        [ -e "${d}/disksize" ] || continue
+        swapoff "/dev/$(basename "$d")" >/dev/null 2>&1 || true
+    done
+    ok "zram disabled."
+}
+
+cli_menu() {
+    local c flag
+    while :; do
+        [ "${BLOCK_PORN:-0}" = "1" ] && flag="$(t on_off)" || flag="$(t off)"
+        printf '\n'
+        box_top
+        box_text "$(t cli_title)"
+        box_sep
+        box_row "1" "$(t cli_dns): ${flag}"
+        [ "${ENABLE_ZRAM:-0}" = "1" ] && flag="$(t on_off)" || flag="$(t off)"
+        box_row "2" "$(t cli_zram): ${flag}"
+        [ "${ENABLE_SWAP:-0}" = "1" ] && flag="$(t on_off)" || flag="$(t off)"
+        box_row "3" "$(t cli_swap): ${flag}"
+        [ "${ENABLE_BBR:-1}" = "1" ] && flag="$(t on_off)" || flag="$(t off)"
+        box_row "4" "$(t cli_bbr): ${flag}"
+        [ "${INSTALL_CUSTOM_CORE:-0}" = "1" ] && flag="custom" || flag="stock"
+        box_row "5" "$(t cli_core): ${flag}"
+        box_row "6" "$(t cli_list)"
+        box_row "7" "$(t cli_rm)"
+        box_sep
+        box_row "8" "$(t cli_start)"
+        box_row "0" "$(t cli_exit)"
+        box_bot
+        printf '\033[1;36m[?]\033[0m %s: ' "$(t cli_pick)"
+        read -r c || c=0
+        case "$c" in
+            1)
+                if [ "${BLOCK_PORN:-0}" = "1" ]; then
+                    BLOCK_PORN=0; restore_default_dns
+                else
+                    BLOCK_PORN=1; configure_dns
+                fi ;;
+            2)
+                if [ "${ENABLE_ZRAM:-0}" = "1" ]; then ENABLE_ZRAM=0; disable_zram; else ENABLE_ZRAM=1; enable_zram; fi ;;
+            3)
+                if [ "${ENABLE_SWAP:-0}" = "1" ]; then ENABLE_SWAP=0; ok "swap will be skipped at install time."
+                else ENABLE_SWAP=1; enable_swap; fi ;;
+            4)
+                if [ "${ENABLE_BBR:-1}" = "1" ]; then ENABLE_BBR=0; warn "BBR will not be applied at install time."
+                else ENABLE_BBR=1; enable_bbr_fq || true; fi ;;
+            5)
+                if [ "${INSTALL_CUSTOM_CORE:-0}" = "1" ]; then INSTALL_CUSTOM_CORE=0; else INSTALL_CUSTOM_CORE=1; fi ;;
+            6) list_instances ;;
+            7)
+                list_instances
+                printf '\033[1;36m[?]\033[0m %s: ' "instance name"
+                read -r flag || flag=""
+                if [ -n "$flag" ] && [ -d "/opt/${flag}" ]; then
+                    INSTANCE="$flag"; do_uninstall
+                else
+                    warn "No such instance: ${flag:-<empty>}"
+                fi ;;
+            8) return 0 ;;
+            0) exit 0 ;;
+            *) warn "1-8 or 0" ;;
+        esac
+    done
 }
 
 
@@ -929,6 +1049,22 @@ fi
 SCRIPT_DIR=""
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+
+# --------------------------------------------------------------------------
+# First question: install straight away, or open the CLI to customise.
+# Answer n (or CLI_MODE=1) to open the menu; it returns here when you choose
+# "start the install".
+# --------------------------------------------------------------------------
+if [ -t 0 ] && [ "$ASSUME_YES" != "1" ] && [ -z "${CLI_MODE:-}" ]; then
+    if ask_yn "$(t mode_q)" y 36; then
+        CLI_MODE=0
+    else
+        CLI_MODE=1
+    fi
+fi
+if [ "${CLI_MODE:-0}" = "1" ]; then
+    cli_menu
 fi
 
 # --------------------------------------------------------------------------
