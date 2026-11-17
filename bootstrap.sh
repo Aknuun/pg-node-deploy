@@ -109,6 +109,12 @@ ENABLE_SWAP="${ENABLE_SWAP:-}"
 # (Enter = yes); non-interactive runs enable it.
 ENABLE_BBR="${ENABLE_BBR:-}"
 
+# Padding widths are counted in characters, so use a UTF-8 locale even when the
+# server only has the C locale (otherwise ${#text} counts bytes).
+if locale -a 2>/dev/null | grep -qiE '^C\.utf-?8$'; then
+    export LC_ALL=C.UTF-8
+fi
+
 export DEBIAN_FRONTEND=noninteractive
 
 # --------------------------------------------------------------------------
@@ -171,6 +177,11 @@ t() {
         fa:cli_exit)     s="خروج" ;;
         fa:on_off)       s="روشن" ;;
         fa:off)          s="خاموش" ;;
+        fa:cli_mem)      s="رم آزاد" ;;
+        fa:cli_sw)       s="سواپ" ;;
+        fa:cli_core_s)   s="هسته" ;;
+        fa:cli_applied)  s="اعمال شد" ;;
+        fa:cli_state)    s="وضعیت" ;;
         en:mode_q)       s="Start the install directly? (n = open the CLI to customise)" ;;
         en:cli_title)    s="CLI - customise this install" ;;
         en:cli_pick)     s="Pick an option" ;;
@@ -185,6 +196,11 @@ t() {
         en:cli_exit)     s="exit" ;;
         en:on_off)       s="on" ;;
         en:off)          s="off" ;;
+        en:cli_mem)      s="RAM free" ;;
+        en:cli_sw)       s="swap" ;;
+        en:cli_core_s)   s="core" ;;
+        en:cli_applied)  s="applied" ;;
+        en:cli_state)    s="state" ;;
         en:node_name_q)  s="Panel node name (final format ip+name, Enter = auto): " ;;
         en:swap_q)       s="Create a swap file sized to this server's RAM (%sM)?" ;;
         en:zram_q)       s="Also add compressed swap in RAM (zram)?" ;;
@@ -508,28 +524,62 @@ disable_zram() {
     ok "zram disabled."
 }
 
+pad_to() {  # <text> <width> - pads by display chars, not bytes
+    local text="$1" width="$2" n
+    n=$(( width - ${#text} ))
+    [ "$n" -lt 0 ] && n=0
+    printf '%s%*s' "$text" "$n" ""
+}
+
+cli_item() {  # <num> <label> <state> <kind: on|off|push|exit>
+    local num="$1" label="$2" state="$3" kind="${4:-push}" dot colour
+    case "$kind" in
+        on)   dot="●"; colour="1;32" ;;
+        off)  dot="○"; colour="2;37" ;;
+        push) dot="›"; colour="1;34" ;;
+        exit) dot="×"; colour="2;37" ;;
+    esac
+    printf '│ \033[1;36m%s\033[0m \033[%sm%s\033[0m %s\033[%sm%s\033[0m \033[1;35m│\033[0m\n' \
+        "$num" "$colour" "$dot" "$(pad_to "$label" 48)" "$colour" "$(pad_to "$state" 8)"
+}
+
+cli_status() {
+    local mem sw core line
+    mem="$(awk '/MemAvailable/{printf "%.1fG", $2/1048576}' /proc/meminfo)"
+    sw="$(awk '/SwapTotal/{t=$2} /SwapFree/{f=$2} END{if (t>0) printf "%dM", (t-f)/1024; else printf "off"}' /proc/meminfo)"
+    [ "${INSTALL_CUSTOM_CORE:-0}" = "1" ] && core="custom" || core="stock"
+    line=" $(t cli_mem): ${mem}  ·  $(t cli_sw): ${sw}  ·  $(t cli_core_s): ${core}"
+    printf '│\033[2m%s\033[0m\n' "$line" | sed 's/$/│/'
+}
+
+cli_note() { printf '  \033[1;32m✓\033[0m %s\n' "$*"; }
+
 cli_menu() {
-    local c flag
+    local c state kind
     while :; do
-        [ "${BLOCK_PORN:-0}" = "1" ] && flag="$(t on_off)" || flag="$(t off)"
         printf '\n'
         box_top
-        box_text "$(t cli_title)"
+        printf '│ \033[1;35m%s\033[0m\033[2m%s\033[0m \033[1;35m│\033[0m\n' "$(pad_to "pg-node-deploy ${SCRIPT_VERSION}" 48)" "$(pad_to "${LANG_CODE}" 12)"
+        printf '│ \033[2m%s\033[0m \033[1;35m│\033[0m\n' "$(pad_to "$(t cli_title)" 60)"
         box_sep
-        box_row "1" "$(t cli_dns): ${flag}"
-        [ "${ENABLE_ZRAM:-0}" = "1" ] && flag="$(t on_off)" || flag="$(t off)"
-        box_row "2" "$(t cli_zram): ${flag}"
-        [ "${ENABLE_SWAP:-0}" = "1" ] && flag="$(t on_off)" || flag="$(t off)"
-        box_row "3" "$(t cli_swap): ${flag}"
-        [ "${ENABLE_BBR:-1}" = "1" ] && flag="$(t on_off)" || flag="$(t off)"
-        box_row "4" "$(t cli_bbr): ${flag}"
-        [ "${INSTALL_CUSTOM_CORE:-0}" = "1" ] && flag="custom" || flag="stock"
-        box_row "5" "$(t cli_core): ${flag}"
-        box_row "6" "$(t cli_list)"
-        box_row "7" "$(t cli_rm)"
+        if [ "${BLOCK_PORN:-0}" = "1" ]; then state="$(t on_off)"; kind=on; else state="$(t off)"; kind=off; fi
+        cli_item 1 "$(t cli_dns)" "$state" "$kind"
+        if [ "${ENABLE_ZRAM:-0}" = "1" ]; then state="$(t on_off)"; kind=on; else state="$(t off)"; kind=off; fi
+        cli_item 2 "$(t cli_zram)" "$state" "$kind"
+        if [ "${ENABLE_SWAP:-0}" = "1" ]; then state="$(t on_off)"; kind=on; else state="$(t off)"; kind=off; fi
+        cli_item 3 "$(t cli_swap)" "$state" "$kind"
+        if [ "${ENABLE_BBR:-1}" = "1" ]; then state="$(t on_off)"; kind=on; else state="$(t off)"; kind=off; fi
+        cli_item 4 "$(t cli_bbr)" "$state" "$kind"
+        if [ "${INSTALL_CUSTOM_CORE:-0}" = "1" ]; then state="custom"; kind=on; else state="stock"; kind=off; fi
+        cli_item 5 "$(t cli_core)" "$state" "$kind"
         box_sep
-        box_row "8" "$(t cli_start)"
-        box_row "0" "$(t cli_exit)"
+        cli_item 6 "$(t cli_list)" "" push
+        cli_item 7 "$(t cli_rm)" "" push
+        box_sep
+        cli_item 8 "$(t cli_start)" "" push
+        cli_item 0 "$(t cli_exit)" "" exit
+        box_sep
+        cli_status
         box_bot
         printf '\033[1;36m[?]\033[0m %s: ' "$(t cli_pick)"
         read -r c || c=0
@@ -537,28 +587,49 @@ cli_menu() {
             1)
                 if [ "${BLOCK_PORN:-0}" = "1" ]; then
                     BLOCK_PORN=0; restore_default_dns || warn "DNS restore failed."
+                    cli_note "$(t cli_dns): $(t off)"
                 else
                     BLOCK_PORN=1; configure_dns || warn "DNS setup failed."
+                    cli_note "$(t cli_dns): $(t on_off)"
                 fi ;;
             2)
-                if [ "${ENABLE_ZRAM:-0}" = "1" ]; then ENABLE_ZRAM=0; disable_zram; else ENABLE_ZRAM=1; enable_zram || warn "zram setup failed."; fi ;;
+                if [ "${ENABLE_ZRAM:-0}" = "1" ]; then
+                    ENABLE_ZRAM=0; disable_zram; cli_note "$(t cli_zram): $(t off)"
+                else
+                    ENABLE_ZRAM=1; enable_zram || warn "zram setup failed."
+                    cli_note "$(t cli_zram): $(t on_off)"
+                fi ;;
             3)
-                if [ "${ENABLE_SWAP:-0}" = "1" ]; then ENABLE_SWAP=0; ok "swap will be skipped at install time."
-                else ENABLE_SWAP=1; enable_swap || warn "swap setup failed."; fi ;;
+                if [ "${ENABLE_SWAP:-0}" = "1" ]; then
+                    ENABLE_SWAP=0; ok "swap will be skipped at install time."
+                    cli_note "$(t cli_swap): $(t off)"
+                else
+                    ENABLE_SWAP=1; enable_swap || warn "swap setup failed."
+                    cli_note "$(t cli_swap): $(t on_off)"
+                fi ;;
             4)
-                if [ "${ENABLE_BBR:-1}" = "1" ]; then ENABLE_BBR=0; warn "BBR will not be applied at install time."
-                else ENABLE_BBR=1; enable_bbr_fq || true; fi ;;
+                if [ "${ENABLE_BBR:-1}" = "1" ]; then
+                    ENABLE_BBR=0; warn "BBR will not be applied at install time."
+                    cli_note "$(t cli_bbr): $(t off)"
+                else
+                    ENABLE_BBR=1; enable_bbr_fq || true
+                    cli_note "$(t cli_bbr): $(t on_off)"
+                fi ;;
             5)
-                if [ "${INSTALL_CUSTOM_CORE:-0}" = "1" ]; then INSTALL_CUSTOM_CORE=0; else INSTALL_CUSTOM_CORE=1; fi ;;
+                if [ "${INSTALL_CUSTOM_CORE:-0}" = "1" ]; then
+                    INSTALL_CUSTOM_CORE=0; cli_note "$(t cli_core): stock"
+                else
+                    INSTALL_CUSTOM_CORE=1; cli_note "$(t cli_core): custom"
+                fi ;;
             6) list_instances ;;
             7)
                 list_instances
                 printf '\033[1;36m[?]\033[0m %s: ' "instance name"
-                read -r flag || flag=""
-                if [ -n "$flag" ] && [ -d "/opt/${flag}" ]; then
-                    INSTANCE="$flag"; do_uninstall || true
+                read -r state || state=""
+                if [ -n "$state" ] && [ -d "/opt/${state}" ]; then
+                    INSTANCE="$state"; do_uninstall || true
                 else
-                    warn "No such instance: ${flag:-<empty>}"
+                    warn "No such instance: ${state:-<empty>}"
                 fi ;;
             8) return 0 ;;
             0) exit 0 ;;

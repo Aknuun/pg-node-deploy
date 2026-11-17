@@ -8,7 +8,7 @@
 
 ## قابلیت‌ها
 
-- **اولین سؤال**: نصب مستقیم شروع شود یا وارد **محیط CLI** شوی؟ با زدن `n` منویی باز می‌شود که همان‌جا می‌توانی فیلتر DNS را روشن/خاموش کنی، zram و سواپ و BBR و نوع کر را عوض کنی، نودهای نصب‌شده را ببینی یا یک نود را حذف کنی، و بعد نصب را شروع کنی
+- **اولین سؤال**: نصب مستقیم شروع شود یا وارد **محیط CLI** شوی؟ با زدن `n` منویی رنگی باز می‌شود (هر گزینه وضعیت روشن/خاموش خودش را با ● سبز یا ○ خاکستری نشان می‌دهد و پایین منو رم آزاد، سواپ و نوع کر را می‌نویسد) که همان‌جا می‌توانی فیلتر DNS را روشن/خاموش کنی، zram و سواپ و BBR و نوع کر را عوض کنی، نودهای نصب‌شده را ببینی یا یک نود را حذف کنی، و بعد نصب را شروع کنی
 - نصب خودکار `pg-node` + هسته سفارشی Xray و نصب `nload`
 - افزودن خودکار نود به پنل با نام `<IP>-<4حرف-اول-هاست>-<دیتاسنتر>` (مثلاً `178.104.242.27-nure-hetzner`) و چند instance روی یک سرور
 - نگه‌داشتن پورت/API Key/گواهی در نصب مجدد، و انتخاب پورت آزاد در نصب تازه
@@ -160,7 +160,7 @@ Automated PasarGuard `pg-node` + custom Xray installer that also **registers the
 - CLI flags: `--yes` (no questions), `--repair`, `--uninstall`, `--help`, `--version`.
 - Coloured per-step progress bar, a summary box at the end, and a **Persian UI** when `LANG_CODE=fa` (or the system locale is fa).
 - Manual swap size with `SWAP_SIZE_MB=4096`.
-- The **first question** is \"start the install directly?\" — answering `n` opens a small **CLI menu** where you can toggle the filtered DNS, zram, swap, BBR and the xray core type (applied immediately where it makes sense), list installed nodes, remove one, and then start the install
+- The **first question** is \"start the install directly?\" — answering `n` opens a coloured **CLI menu** (each option shows its state with a green ● or a grey ○, and the footer prints free RAM, swap usage and core type) where you can toggle the filtered DNS, zram, swap, BBR and the xray core type (applied immediately where it makes sense), list installed nodes, remove one, and then start the install
 - It asks up front (right after the node name) whether to create a **swap file sized to the server's RAM** — **Enter = yes** (equal to RAM, min 2G, max 8G, saved in `/etc/fstab`); `ENABLE_SWAP=0` skips it
 - It asks up front (with the other setup questions) whether to enable **BBR + fq** (kernel tuning for lossy/high-latency links) — **Enter = yes**, applied in Step 3; `ENABLE_BBR=0` skips it.
 - Interactive run asks, besides the node name: block adult content with a filtered (Family) DNS? (default **yes**) and install the custom Xray core? (default **no**). `BLOCK_PORN=0` removes a previously applied filtered DNS and restores the server default (systemd-resolved stub, 127.0.0.53); `INSTALL_CUSTOM_CORE=0` installs the official XTLS release instead of the custom core.
