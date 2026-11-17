@@ -536,15 +536,15 @@ cli_menu() {
         case "$c" in
             1)
                 if [ "${BLOCK_PORN:-0}" = "1" ]; then
-                    BLOCK_PORN=0; restore_default_dns
+                    BLOCK_PORN=0; restore_default_dns || warn "DNS restore failed."
                 else
-                    BLOCK_PORN=1; configure_dns
+                    BLOCK_PORN=1; configure_dns || warn "DNS setup failed."
                 fi ;;
             2)
-                if [ "${ENABLE_ZRAM:-0}" = "1" ]; then ENABLE_ZRAM=0; disable_zram; else ENABLE_ZRAM=1; enable_zram; fi ;;
+                if [ "${ENABLE_ZRAM:-0}" = "1" ]; then ENABLE_ZRAM=0; disable_zram; else ENABLE_ZRAM=1; enable_zram || warn "zram setup failed."; fi ;;
             3)
                 if [ "${ENABLE_SWAP:-0}" = "1" ]; then ENABLE_SWAP=0; ok "swap will be skipped at install time."
-                else ENABLE_SWAP=1; enable_swap; fi ;;
+                else ENABLE_SWAP=1; enable_swap || warn "swap setup failed."; fi ;;
             4)
                 if [ "${ENABLE_BBR:-1}" = "1" ]; then ENABLE_BBR=0; warn "BBR will not be applied at install time."
                 else ENABLE_BBR=1; enable_bbr_fq || true; fi ;;
@@ -556,7 +556,7 @@ cli_menu() {
                 printf '\033[1;36m[?]\033[0m %s: ' "instance name"
                 read -r flag || flag=""
                 if [ -n "$flag" ] && [ -d "/opt/${flag}" ]; then
-                    INSTANCE="$flag"; do_uninstall
+                    INSTANCE="$flag"; do_uninstall || true
                 else
                     warn "No such instance: ${flag:-<empty>}"
                 fi ;;
@@ -1051,6 +1051,9 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 
+# Temp dir is created before the prompts because the CLI menu (DNS toggle) uses it.
+WORK_DIR="$(mktemp -d /tmp/pg-node-install.XXXXXX)"
+
 # --------------------------------------------------------------------------
 # First question: install straight away, or open the CLI to customise.
 # Answer n (or CLI_MODE=1) to open the menu; it returns here when you choose
@@ -1191,8 +1194,7 @@ INFO_FILE="/root/${INSTANCE}-info.txt"
 
 log "Using pg-node instance: ${INSTANCE}"
 
-WORK_DIR="$(mktemp -d /tmp/pg-node-install.XXXXXX)"
-cleanup() { rm -rf "$WORK_DIR"; }
+cleanup() { [ -n "${WORK_DIR:-}" ] && rm -rf "$WORK_DIR"; }
 trap cleanup EXIT
 
 # True when everything needed to add this node to a panel is available,
