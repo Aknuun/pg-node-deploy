@@ -379,6 +379,16 @@ health_check() {
     if command -v docker >/dev/null 2>&1; then
         docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "^(${INSTANCE}|node)$" \
             && check_row "node container up" ok || check_row "node container up" fail
+        # The panel polls the node (GetBaseInfo) every few seconds while it is
+        # connected, so a recent success proves registration works end to end.
+        local cname conn_label
+        cname="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E "^(${INSTANCE}|node)$" | head -n1)"
+        if [ "$LANG_CODE" = fa ]; then conn_label="اتصال نود به پنل"; else conn_label="node connected to the panel"; fi
+        if [ -n "$cname" ] && docker logs --since 10m "$cname" 2>&1 | grep -q 'GetBaseInfo, Status: Success'; then
+            check_row "$conn_label" ok
+        else
+            check_row "$conn_label" fail
+        fi
     else
         warn "docker not found; skipping container check."
     fi
