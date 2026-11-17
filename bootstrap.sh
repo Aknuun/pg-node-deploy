@@ -384,8 +384,23 @@ health_check() {
         local cname conn_label
         cname="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E "^(${INSTANCE}|node)$" | head -n1)"
         if [ "$LANG_CODE" = fa ]; then conn_label="اتصال نود به پنل"; else conn_label="node connected to the panel"; fi
-        if [ -n "$cname" ] && docker logs --since 10m "$cname" 2>&1 | grep -q 'GetBaseInfo, Status: Success'; then
-            check_row "$conn_label" ok
+        if [ -n "$cname" ]; then
+            # The panel needs a few seconds to reach the node, so wait instead of
+            # reporting a false failure right after the install.
+            local waited=0 limit="${PANEL_WAIT_SECS:-60}"
+            if ! docker logs --since 10m "$cname" 2>&1 | grep -q 'GetBaseInfo, Status: Success'; then
+                printf '  \033[1;36m...\033[0m waiting up to %ss for the node to connect to the panel\n' "$limit"
+                while [ "$waited" -lt "$limit" ]; do
+                    sleep 3
+                    waited=$((waited + 3))
+                    docker logs --since 10m "$cname" 2>&1 | grep -q 'GetBaseInfo, Status: Success' && break
+                done
+            fi
+            if docker logs --since 10m "$cname" 2>&1 | grep -q 'GetBaseInfo, Status: Success'; then
+                check_row "$conn_label" ok
+            else
+                check_row "$conn_label" fail
+            fi
         else
             check_row "$conn_label" fail
         fi
