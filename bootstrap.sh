@@ -130,7 +130,7 @@ err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
 ask_yn() {
     local q="$1" def="${2:-y}" colour="${3:-36}" ans hint
     if [ "$def" = "y" ]; then hint="Y/n"; else hint="y/N"; fi
-    printf '\033[1;%sm[?]\033[0m %s [%s]: ' "$colour" "$q" "$hint" >&2
+    printf '\033[1;%sm[?] %s [%s]:\033[0m ' "$colour" "$q" "$hint" >&2
     read -r ans || true
     ans="${ans:-$def}"
     case "$ans" in
@@ -593,7 +593,7 @@ cli_menu() {
     MENU_W=52
     while :; do
         cli_menu_draw
-        printf '\033[1;36m[?]\033[0m %s: ' "$(t cli_pick)"
+        printf '\033[1;38;5;51m[?] %s:\033[0m ' "$(t cli_pick)"
         read -r c || c=0
         case "$c" in
             1)
@@ -616,7 +616,7 @@ cli_menu() {
             6) list_instances ;;
             7)
                 list_instances
-                printf '\033[1;36m[?]\033[0m %s: ' "instance name"
+                printf '\033[1;38;5;203m[?] %s:\033[0m ' "instance name"
                 read -r state || state=""
                 if [ -n "$state" ] && [ -d "/opt/${state}" ]; then
                     INSTANCE="$state"; do_uninstall || true
@@ -1151,7 +1151,7 @@ if [ -z "$INSTANCE" ]; then
     if [ -d "/opt/${DEFAULT_INSTANCE}" ]; then
         if [ -t 0 ]; then
             warn "An existing '${DEFAULT_INSTANCE}' install was found at /opt/${DEFAULT_INSTANCE}."
-            printf '\033[1;36m[?]\033[0m Press Enter to (re)install on it, or type a new instance name: ' >&2
+            printf '\033[1;38;5;220m[?] Press Enter to (re)install on it, or type a new instance name:\033[0m ' >&2
             read -r INSTANCE || true
             [ -n "$INSTANCE" ] || INSTANCE="$DEFAULT_INSTANCE"
         else
@@ -1184,9 +1184,9 @@ fi
 # --------------------------------------------------------------------------
 NODE_NAME_SUFFIX="${NODE_NAME_SUFFIX:-}"
 if [ -z "${NODE_NAME:-}" ] && [ -z "$NODE_NAME_SUFFIX" ] && [ -t 0 ] && [ "$ASSUME_YES" != "1" ]; then
-    printf '\033[1;38;5;177m[?]\033[0m ' >&2
+    printf '\033[1;38;5;177m[?] ' >&2
     t node_name_q >&2
-    printf '\n' >&2
+    printf '\033[0m\n' >&2
     read -r NODE_NAME_SUFFIX || true
 fi
 
