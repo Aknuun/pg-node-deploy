@@ -4,20 +4,68 @@
 # including automatic registration of the node in a PasarGuard panel.
 #
 # Steps:
-#   0) optional swap file sized from RAM (asked first, Enter = yes)
-#   1) apt update
+#   0) optional swap / zram sized from RAM (asked up front, Enter = yes / no)
+#   1) apt update (+ journald cap and logrotate)
 #   2) configure + lock /etc/resolv.conf
 #   3) tune kernel: sysctl.d (tcp_mem/swappiness/file-max) + nf_conntrack
-#      (+ optional BBR congestion control / fq qdisc, asked here, Enter = yes)
+#      (+ optional BBR congestion control / fq qdisc, asked up front, Enter = yes)
 #   4) install pg-node non-interactively (random free port if 62050/62051 are busy)
-#   5) download the custom xray core
+#   5) keep the stock xray core (default) or download the custom one
 #   6) install xray core, disable IPv6, point pg-node at it and restart
 #   7) (optional) register the node in the panel
+#   +) health check and a summary box
 #
 # Run as root:      sudo bash bootstrap.sh
 # Custom instance:  sudo NODE_INSTANCE=fin3 bash bootstrap.sh
+# Non-interactive:  sudo bash bootstrap.sh --yes
+# Help:             bash bootstrap.sh --help
 #
 set -Eeuo pipefail
+
+SCRIPT_VERSION="2.5.0"
+REPO_SLUG="Aknuun/pg-node-deploy"
+
+usage() {
+    cat <<EOF
+pg-node-deploy ${SCRIPT_VERSION} - PasarGuard node installer
+
+Usage: sudo bash bootstrap.sh [options]
+
+  -y, --yes        non-interactive; use defaults (swap on, no adult filter, stock core, BBR on)
+      --repair     reinstall over an existing instance, keeping ports, cert and API key
+  -u, --uninstall  stop and remove this node instance (asks for confirmation)
+  -h, --help       show this help
+  -V, --version    show the script version
+
+Environment:
+  NODE_INSTANCE=pg-node        instance name (several installs can coexist)
+  NODE_NAME_SUFFIX=myname      panel node name suffix (default: host + datacenter)
+  ENABLE_SWAP=0|1              create /swapfile sized to RAM
+  SWAP_SIZE_MB=4096            override the swap size
+  ENABLE_ZRAM=0|1              add compressed swap in RAM (zram)
+  BLOCK_PORN=0|1               filtered (Family) DNS
+  INSTALL_CUSTOM_CORE=0|1      custom core with per-user tracker (default: 0 = stock)
+  ENABLE_BBR=0|1               BBR + fq
+  LANG_CODE=fa|en              messages language (auto from \$LANG)
+  PANEL_URL / PANEL_USERNAME / PANEL_PASSWORD   register the node automatically
+EOF
+}
+
+ASSUME_YES=0
+REPAIR=0
+UNINSTALL=0
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -y|--yes) ASSUME_YES=1 ;;
+        --repair) ASSUME_YES=1; REPAIR=1 ;;
+        -u|--uninstall) UNINSTALL=1 ;;
+        -h|--help) usage; exit 0 ;;
+        -V|--version) echo "pg-node-deploy ${SCRIPT_VERSION}"; exit 0 ;;
+        *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
+    esac
+    shift
+done
+
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -87,12 +135,89 @@ ask_yn() {
 die()  { err "$*"; exit 1; }
 
 # --------------------------------------------------------------------------
+# Language: LANG_CODE=fa switches the questions/summary to Persian.
+# --------------------------------------------------------------------------
+LANG_CODE="${LANG_CODE:-}"
+if [ -z "$LANG_CODE" ]; then
+    case "${LANG:-}" in
+        fa*|*_IR*) LANG_CODE="fa" ;;
+        *) LANG_CODE="en" ;;
+    esac
+fi
+
+t() {
+    local key="$1" s; shift
+    case "${LANG_CODE}:${key}" in
+        fa:node_name_q)  s="نام نود در پنل (فرمت نهایی ip+name، اینتر = خودکار): " ;;
+        fa:swap_q)       s="فایل سواپ متناسب با رم سرور (%sM) ساخته شود؟" ;;
+        fa:zram_q)       s="سواپ فشرده در رم (zram) هم اضافه شود؟" ;;
+        fa:porn_q)       s="محتوای بزرگسال با DNS فیلترشده مسدود شود؟" ;;
+        fa:core_q)       s="کر اختصاصی xray (با ردیاب اتصال هر کاربر) نصب شود؟" ;;
+        fa:bbr_q)        s="BBR + fq فعال شود (سرعت و پایداری بهتر روی لینک‌های پرافت)؟" ;;
+        fa:done)         s="نصب نود PasarGuard تمام شد" ;;
+        fa:health)       s="بررسی سلامت نصب" ;;
+        fa:uninstall_q)  s="حذف کامل این نود؟ نام نمونه را تایپ کن (%s): " ;;
+        en:node_name_q)  s="Panel node name (final format ip+name, Enter = auto): " ;;
+        en:swap_q)       s="Create a swap file sized to this server's RAM (%sM)?" ;;
+        en:zram_q)       s="Also add compressed swap in RAM (zram)?" ;;
+        en:porn_q)       s="Block adult content with a filtered (Family) DNS?" ;;
+        en:core_q)       s="Install the custom xray core (per-user connection tracker)?" ;;
+        en:bbr_q)        s="Enable BBR + fq (better speed and stability on lossy links)?" ;;
+        en:done)         s="PasarGuard node installed" ;;
+        en:health)       s="Install health check" ;;
+        en:uninstall_q)  s="Remove this node completely? Type the instance name (%s): " ;;
+        *)               s="${key}" ;;
+    esac
+    # shellcheck disable=SC2059
+    printf "$s" "$@"
+}
+
+# --------------------------------------------------------------------------
+# Progress bar + summary box
+# --------------------------------------------------------------------------
+STEP_TOTAL=6
+
+bar() {
+    local n="$1" i out=""
+    for ((i = 0; i < 10; i++)); do
+        if [ "$i" -lt "$n" ]; then out+="█"; else out+="░"; fi
+    done
+    printf '%s' "$out"
+}
+
+step() {
+    local n="$1"; shift
+    local filled=$((n * 10 / STEP_TOTAL))
+    printf '\033[1;35m[%s]\033[0m \033[1mStep %s/%s\033[0m %s\n' \
+        "$(bar "$filled")" "$n" "$STEP_TOTAL" "$*"
+}
+
+BOX_W=62
+box_top()  { printf '┌%s┐\n' "$(printf '─%.0s' $(seq 1 "$BOX_W"))"; }
+box_sep()  { printf '├%s┤\n' "$(printf '─%.0s' $(seq 1 "$BOX_W"))"; }
+box_bot()  { printf '└%s┘\n' "$(printf '─%.0s' $(seq 1 "$BOX_W"))"; }
+box_row()  {
+    local label="$1" value="${2:-}" text
+    text="$(printf ' %-13s %s' "$label" "$value")"
+    printf '│%-*s│\n' "$BOX_W" "$text"
+}
+box_text() {
+    local text=" $1"
+    printf '│%-*s│\n' "$BOX_W" "$text"
+}
+
+
+# --------------------------------------------------------------------------
 # Swap helpers - size follows RAM: equal to RAM, clamped to 2G..8G.
 # --------------------------------------------------------------------------
 SWAP_FILE="/swapfile"
 
 swap_size_mb() {
     local ram_mb mb
+    if [ -n "${SWAP_SIZE_MB:-}" ]; then
+        printf '%s\n' "$SWAP_SIZE_MB"
+        return 0
+    fi
     ram_mb=$(( $(awk '/^MemTotal:/{print $2}' /proc/meminfo) / 1024 ))
     mb=$ram_mb
     [ "$mb" -lt 2048 ] && mb=2048
@@ -137,6 +262,166 @@ enable_swap() {
             || warn "Could not add ${SWAP_FILE} to /etc/fstab; swap will not survive a reboot."
     fi
 }
+
+# --------------------------------------------------------------------------
+# zram - compressed swap in RAM (fast, spares the disk). Optional.
+# --------------------------------------------------------------------------
+zram_size_mb() {
+    local ram_mb mb
+    ram_mb=$(( $(awk '/^MemTotal:/{print $2}' /proc/meminfo) / 1024 ))
+    mb=$((ram_mb / 2))
+    [ "$mb" -lt 512 ] && mb=512
+    [ "$mb" -gt 4096 ] && mb=4096
+    printf '%s\n' "$mb"
+}
+
+enable_zram() {
+    local mb
+    mb="${1:-$(zram_size_mb)}"
+    if swapon --show=NAME 2>/dev/null | grep -q zram; then
+        ok "zram swap is already active."
+        return 0
+    fi
+    if ! modprobe zram 2>/dev/null; then
+        log "zram module missing; trying linux-modules-extra..."
+        apt-get install -y "linux-modules-extra-$(uname -r)" >/dev/null 2>&1 || true
+        modprobe zram 2>/dev/null || {
+            warn "zram is not available on this kernel; skipping compressed swap."
+            return 0
+        }
+    fi
+    cat > /usr/local/sbin/zram-swap.sh <<EOS
+#!/bin/sh
+set -e
+modprobe zram
+[ -e /dev/zram0 ] || exit 0
+echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null || true
+echo none > /sys/block/zram0/comp_algorithm 2>/dev/null || true
+echo ${mb}M > /sys/block/zram0/disksize
+mkswap /dev/zram0 >/dev/null 2>&1 || true
+swapon -p 100 /dev/zram0 2>/dev/null || true
+EOS
+    chmod 755 /usr/local/sbin/zram-swap.sh
+    cat > /etc/systemd/system/zram-swap.service <<'EOS'
+[Unit]
+Description=zram compressed swap
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/zram-swap.sh
+
+[Install]
+WantedBy=multi-user.target
+EOS
+    systemctl daemon-reload
+    systemctl enable --now zram-swap >/dev/null 2>&1 || true
+    if swapon --show=NAME 2>/dev/null | grep -q zram; then
+        ok "zram swap enabled: ${mb}M (compressed, in RAM)."
+    else
+        warn "zram unit did not activate; continuing without compressed swap."
+        systemctl disable --now zram-swap >/dev/null 2>&1 || true
+    fi
+}
+
+# --------------------------------------------------------------------------
+# Logs - cap journald and rotate node/xray logs so a chatty service cannot
+# fill the disk (same failure we hit with gost on the Iranian servers).
+# --------------------------------------------------------------------------
+cap_journal() {
+    install -d /etc/systemd/journald.conf.d 2>/dev/null || true
+    cat > /etc/systemd/journald.conf.d/99-pg-node-deploy.conf <<'EOS'
+[Journal]
+SystemMaxUse=200M
+RuntimeMaxUse=100M
+EOS
+    systemctl restart systemd-journald >/dev/null 2>&1 || true
+    ok "journald capped at 200M."
+}
+
+setup_logrotate() {
+    cat > /etc/logrotate.d/pg-node-deploy <<'EOS'
+/var/log/pg-node/*.log /var/log/xray/*.log {
+    size 50M
+    rotate 2
+    missingok
+    notifempty
+    copytruncate
+}
+EOS
+    ok "logrotate rule written for node/xray logs."
+}
+
+# --------------------------------------------------------------------------
+# Health check - what the operator actually needs to know after install.
+# --------------------------------------------------------------------------
+health_check() {
+    local fails=0
+    printf '\n'
+    printf '\033[1;36m== %s ==\033[0m\n' "$(t health)"
+    check_row() {
+        local label="$1" state="$2"
+        if [ "$state" = ok ]; then
+            printf '  \033[1;32m[PASS]\033[0m %s\n' "$label"
+        else
+            printf '  \033[1;31m[FAIL]\033[0m %s\n' "$label"
+            fails=$((fails + 1))
+        fi
+    }
+    command -v ss >/dev/null 2>&1 || apt-get install -y iproute2 >/dev/null 2>&1 || true
+    port_in_use "$SERVICE_PORT" && check_row "gRPC port ${SERVICE_PORT} listening" ok \
+        || check_row "gRPC port ${SERVICE_PORT} listening" fail
+    port_in_use "$API_PORT" && check_row "API port ${API_PORT} listening" ok \
+        || check_row "API port ${API_PORT} listening" fail
+    pgrep -f 'xray(-core)?/xray|/xray ' >/dev/null 2>&1 && check_row "xray process running" ok \
+        || check_row "xray process running" fail
+    if command -v docker >/dev/null 2>&1; then
+        docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "^(${INSTANCE}|node)$" \
+            && check_row "node container up" ok || check_row "node container up" fail
+    else
+        warn "docker not found; skipping container check."
+    fi
+    [ -s "$PG_ENV_FILE" ] && check_row "instance env file ${PG_ENV_FILE}" ok \
+        || check_row "instance env file ${PG_ENV_FILE}" fail
+    TcpRetransSegs="$(awk '/^TcpExt:/{for(i=1;i<=NF;i++) if($i=="TCPLostRetransmit") print $(i+1)}' /proc/net/netstat 2>/dev/null | head -1)"
+    printf '  mem available : %s MB\n' "$(awk '/MemAvailable/{printf "%d", $2/1024}' /proc/meminfo)"
+    printf '  swap used     : %s\n' "$(free -m | awk '/Swap:/{print $3" / "$2" MB"}')"
+    [ "${TcpRetransSegs:-0}" -gt 0 ] 2>/dev/null && printf '  lost retransmits (cumulative): %s\n' "$TcpRetransSegs"
+    if [ "$fails" -eq 0 ]; then
+        printf '\033[1;32m  all checks passed\033[0m\n\n'
+    else
+        printf '\033[1;33m  %s check(s) failed - see above\033[0m\n\n' "$fails"
+    fi
+    return 0
+}
+
+# --------------------------------------------------------------------------
+# Uninstall - stop this instance and remove its files (asks for the name).
+# --------------------------------------------------------------------------
+do_uninstall() {
+    local inst="$INSTANCE" ans
+    [ -d "/opt/${inst}" ] || die "No instance '${inst}' found (expected /opt/${inst})."
+    printf '\033[1;33m[?]\033[0m ' >&2
+    t uninstall_q "$inst" >&2
+    read -r ans || true
+    [ "$ans" = "$inst" ] || die "Aborted (name did not match)."
+    if command -v "$inst" >/dev/null 2>&1; then
+        "$inst" down >/dev/null 2>&1 || true
+        "$inst" service-stop >/dev/null 2>&1 || true
+    fi
+    systemctl disable --now "${inst}.service" >/dev/null 2>&1 || true
+    if command -v docker >/dev/null 2>&1; then
+        docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^${inst}(-|$)" \
+            | xargs -r docker rm -f >/dev/null 2>&1 || true
+    fi
+    rm -f "/etc/systemd/system/${inst}.service"
+    rm -rf "/opt/${inst}" "/var/lib/${inst}" "/usr/local/bin/${inst}" "/root/${inst}-info.txt"
+    systemctl daemon-reload 2>/dev/null || true
+    ok "Instance '${inst}' removed."
+    warn "Any leftover container (e.g. 'node') was not touched on purpose - check with: docker ps"
+}
+
 
 # envval <file> <KEY> - read a value from a KEY=value file.
 envval() {
@@ -650,6 +935,15 @@ fi
 validate_instance_name "$INSTANCE" \
     || die "Invalid instance name '${INSTANCE}'. Use 1-63 chars: letters, digits, '_' or '-', starting with a letter or digit."
 
+if [ "$UNINSTALL" = "1" ]; then
+    do_uninstall
+    exit 0
+fi
+
+if [ "$REPAIR" = "1" ] && [ ! -d "/opt/${INSTANCE}" ]; then
+    warn "Nothing to repair at /opt/${INSTANCE}; running a fresh install instead."
+fi
+
 # --------------------------------------------------------------------------
 # Panel node name - asked FIRST so the panel entry is ip+name.
 # Final format: <server-ip>-<name> (custom instance appends -<instance>).
@@ -658,17 +952,22 @@ validate_instance_name "$INSTANCE" \
 # Non-interactive runs never block: empty suffix means auto.
 # --------------------------------------------------------------------------
 NODE_NAME_SUFFIX="${NODE_NAME_SUFFIX:-}"
-if [ -z "${NODE_NAME:-}" ] && [ -z "$NODE_NAME_SUFFIX" ] && [ -t 0 ]; then
-    printf '\033[1;35m[?]\033[0m Panel node name - final format is ip+name, e.g. 178.104.242.27-myname\n' >&2
-    printf '\033[1;35m[?]\033[0m Enter a name for this node in the panel (Enter = auto): ' >&2
+if [ -z "${NODE_NAME:-}" ] && [ -z "$NODE_NAME_SUFFIX" ] && [ -t 0 ] && [ "$ASSUME_YES" != "1" ]; then
+    printf '\033[1;35m[?]\033[0m ' >&2
+    t node_name_q >&2
+    printf '\n' >&2
     read -r NODE_NAME_SUFFIX || true
 fi
 
 # --------------------------------------------------------------------------
 # Swap - asked right after the node name (Enter = yes). Sized from RAM (2G..8G).
+# --yes turns it on; there is no prompt in non-interactive runs.
 # --------------------------------------------------------------------------
-if [ -t 0 ] && [ -z "${ENABLE_SWAP:-}" ]; then
-    if ask_yn "Create a swap file sized to this server's RAM ($(swap_size_mb)M)?" y 34; then
+if [ "$ASSUME_YES" = "1" ] && [ -z "${ENABLE_SWAP:-}" ]; then
+    ENABLE_SWAP=1
+fi
+if [ -t 0 ] && [ "$ASSUME_YES" != "1" ] && [ -z "${ENABLE_SWAP:-}" ]; then
+    if ask_yn "$(t swap_q "$(swap_size_mb)")" y 34; then
         ENABLE_SWAP=1
     else
         ENABLE_SWAP=0
@@ -678,29 +977,46 @@ if [ "${ENABLE_SWAP:-0}" = "1" ]; then
     enable_swap
 fi
 
-# Extra choices (Enter = yes). Non-interactive runs keep all enabled.
-if [ -t 0 ]; then
+# Extra choices. Interactive: Enter = yes, except the custom core (= no).
+if [ -t 0 ] && [ "$ASSUME_YES" != "1" ]; then
+    if [ -z "${ENABLE_ZRAM:-}" ]; then
+        if ask_yn "$(t zram_q)" n 35; then
+            ENABLE_ZRAM=1
+        else
+            ENABLE_ZRAM=0
+        fi
+    fi
     if [ -z "${BLOCK_PORN:-}" ]; then
-        if ask_yn "Block adult content on this server with a filtered (Family) DNS?" y 36; then
+        if ask_yn "$(t porn_q)" y 36; then
             BLOCK_PORN=1
         else
             BLOCK_PORN=0
         fi
     fi
     if [ -z "${INSTALL_CUSTOM_CORE:-}" ]; then
-        if ask_yn "Install the custom xray core (per-user connection tracker)?" y 33; then
+        if ask_yn "$(t core_q)" n 33; then
             INSTALL_CUSTOM_CORE=1
         else
             INSTALL_CUSTOM_CORE=0
         fi
     fi
     if [ -z "${ENABLE_BBR:-}" ]; then
-        if ask_yn "Enable BBR + fq (better speed and stability on lossy links)?" y 32; then
+        if ask_yn "$(t bbr_q)" y 32; then
             ENABLE_BBR=1
         else
             ENABLE_BBR=0
         fi
     fi
+fi
+
+# Non-interactive defaults.
+ENABLE_ZRAM="${ENABLE_ZRAM:-0}"
+BLOCK_PORN="${BLOCK_PORN:-0}"
+INSTALL_CUSTOM_CORE="${INSTALL_CUSTOM_CORE:-0}"
+ENABLE_BBR="${ENABLE_BBR:-1}"
+
+if [ "$ENABLE_ZRAM" = "1" ]; then
+    enable_zram
 fi
 
 PG_APP_NAME="$INSTANCE"
@@ -766,7 +1082,9 @@ pick_free_port_except() {
 # --------------------------------------------------------------------------
 # Step 1 - apt update
 # --------------------------------------------------------------------------
-log "Step 1/6 - apt update"
+printf '\033[1;35m==> pg-node-deploy %s (%s) - instance: %s\033[0m\n' "$SCRIPT_VERSION" "$LANG_CODE" "$INSTANCE"
+
+step 1 "apt update"
 apt-get update -y || warn "apt-get update reported errors; continuing anyway."
 ok "Package lists updated."
 
@@ -776,16 +1094,20 @@ if ! command -v nload >/dev/null 2>&1; then
 fi
 command -v nload >/dev/null 2>&1 && ok "nload is installed." || warn "nload is not available."
 
+# Keep logs from filling the disk (a chatty service once ate 56G on one host).
+cap_journal
+setup_logrotate
+
 # --------------------------------------------------------------------------
 # Step 2 - resolv.conf (verified, never break DNS)
 # --------------------------------------------------------------------------
-log "Step 2/6 - configuring /etc/resolv.conf"
+step 2 "configuring /etc/resolv.conf"
 configure_dns
 
 # --------------------------------------------------------------------------
 # Step 3 - kernel tuning (sysctl + nf_conntrack, persistent)
 # --------------------------------------------------------------------------
-log "Step 3/6 - tuning kernel (sysctl + nf_conntrack, persistent)"
+step 3 "tuning kernel (sysctl, BBR, limits)"
 
 if [ "${ENABLE_BBR:-1}" = "1" ]; then
     enable_bbr_fq
@@ -797,7 +1119,7 @@ tune_conntrack
 # --------------------------------------------------------------------------
 # Step 4 - install pg-node
 # --------------------------------------------------------------------------
-log "Step 4/6 - installing PasarGuard node (non-interactive)"
+step 4 "installing PasarGuard node"
 
 command -v curl >/dev/null 2>&1 || { apt-get install -y curl; }
 
@@ -1002,15 +1324,15 @@ detect_xray_arch() {
     esac
 }
 
-if [ "${INSTALL_CUSTOM_CORE:-1}" != "1" ]; then
-    log "Step 5/6 - custom core declined; keeping the core that ships with pg-node."
+if [ "${INSTALL_CUSTOM_CORE:-0}" != "1" ]; then
+    step 5 "keeping the stock xray core (custom core not selected)"
     # Remove a path left by an earlier custom-core run so the node falls back
     # to its own default (the env template's /usr/local/bin/xray).
     if [ -f "$PG_ENV_FILE" ]; then
         sed -i -E '/^XRAY_EXECUTABLE_PATH *=/d' "$PG_ENV_FILE"
     fi
 else
-log "Step 5/6 - downloading xray core"
+step 5 "downloading xray core"
 command -v wget  >/dev/null 2>&1 || { apt-get update -y; apt-get install -y wget; }
 command -v unzip >/dev/null 2>&1 || { apt-get update -y; apt-get install -y unzip; }
 
@@ -1033,7 +1355,7 @@ ok "Downloaded xray archive (${XRAY_ZIP_NAME})."
 # --------------------------------------------------------------------------
 # Step 5 - install xray core and point pg-node at it
 # --------------------------------------------------------------------------
-log "Step 6/6 - installing xray core (${XRAY_ARCH})"
+step 6 "installing xray core (${XRAY_ARCH})"
 mkdir -p "$XRAY_DIR"
 cp -f "$WORK_DIR/${XRAY_ZIP_NAME}" "$XRAY_DIR/"
 
@@ -1141,19 +1463,20 @@ RESET=$'\033[0m'
 } > "$INFO_FILE"
 chmod 600 "$INFO_FILE"
 
-# Colored terminal output (certificate + API key in orange).
-printf '%s\n' "$SEP"
-printf ' PasarGuard node installed - INSTALL DONE\n'
-printf '%s\n' "$SEP"
-printf ' Instance     : %s\n' "$INSTANCE"
-printf ' Node name    : '
-printf '%s%s%s\n' "$ORANGE" "$NODE_NAME" "$RESET"
-printf ' Server IP    : '
-printf '%s%s%s\n' "$ORANGE" "$SERVER_IP" "$RESET"
-printf ' Service port : %s\n' "$SERVICE_PORT"
-printf ' API port     : %s\n' "$API_PORT"
-printf ' Certificate  : %s\n' "$PG_CERT_FILE"
-printf ' API Key      : %s\n' "$API_KEY"
+# Colored terminal output: a summary box, then the copy-paste blocks.
+box_top
+box_text "$(t done)"
+box_sep
+box_row "Instance" "$INSTANCE"
+box_row "Node name" "$NODE_NAME"
+box_row "Server IP" "$SERVER_IP"
+box_row "Service port" "$SERVICE_PORT"
+box_row "API port" "$API_PORT"
+box_row "Core" "$([ "${INSTALL_CUSTOM_CORE:-0}" = "1" ] && echo 'custom (per-user tracker)' || echo 'stock xray')"
+box_row "Swap" "$(free -m | awk '/Swap:/{if ($2>0) print $2" MB"; else print "none"}')"
+box_row "Info file" "$INFO_FILE"
+box_bot
+
 printf '%s\n' "$SEP"
 printf '%s\n' '----- BEGIN CERTIFICATE (select & copy everything below) -----'
 printf '%s%s%s\n' "$ORANGE" "$CERT" "$RESET"
@@ -1192,3 +1515,8 @@ else
     warn "No panel credentials found (PANEL_URL/PANEL_USERNAME/PANEL_PASSWORD or ${PANEL_CONF_FILE})."
     warn "Skipping panel registration. Run it later with: sudo NODE_INSTANCE=${INSTANCE} bash ${REGISTER_SCRIPT_NAME}"
 fi
+
+# --------------------------------------------------------------------------
+# Final health check
+# --------------------------------------------------------------------------
+health_check || true
