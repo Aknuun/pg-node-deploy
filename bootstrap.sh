@@ -173,7 +173,7 @@ t() {
         fa:cli_core)     s="نوع کر xray" ;;
         fa:cli_list)     s="نمایش نودهای نصب‌شده" ;;
         fa:cli_rm)       s="حذف یک نود نصب‌شده" ;;
-        fa:cli_start)    s="شروع نصب با این تنظیمات" ;;
+        fa:cli_start)    s="شروع نصب" ;;
         fa:cli_exit)     s="خروج" ;;
         fa:on_off)       s="روشن" ;;
         fa:off)          s="خاموش" ;;
@@ -192,7 +192,7 @@ t() {
         en:cli_core)     s="xray core type" ;;
         en:cli_list)     s="list installed nodes" ;;
         en:cli_rm)       s="remove an installed node" ;;
-        en:cli_start)    s="start the install with these settings" ;;
+        en:cli_start)    s="start the install" ;;
         en:cli_exit)     s="exit" ;;
         en:on_off)       s="on" ;;
         en:off)          s="off" ;;
@@ -524,10 +524,13 @@ disable_zram() {
     ok "zram disabled."
 }
 
-pad_to() {  # <text> <width> - pads by display chars, not bytes
+pad_to() {  # <text> <width> - pads (or truncates) by characters, not bytes
     local text="$1" width="$2" n
+    if [ "${#text}" -gt "$width" ]; then
+        printf '%s' "${text:0:width}"
+        return 0
+    fi
     n=$(( width - ${#text} ))
-    [ "$n" -lt 0 ] && n=0
     printf '%s%*s' "$text" "$n" ""
 }
 
@@ -539,8 +542,8 @@ cli_item() {  # <num> <label> <state> <kind: on|off|push|exit>
         push) dot="›"; colour="1;34" ;;
         exit) dot="×"; colour="2;37" ;;
     esac
-    printf '│ \033[1;36m%s\033[0m \033[%sm%s\033[0m %s\033[%sm%s\033[0m \033[1;35m│\033[0m\n' \
-        "$num" "$colour" "$dot" "$(pad_to "$label" 48)" "$colour" "$(pad_to "$state" 8)"
+    printf '│ \033[1;36m%s\033[0m \033[%sm%s\033[0m %s \033[%sm%s\033[0m\033[1;35m│\033[0m\n' \
+        "$num" "$colour" "$dot" "$(pad_to "$label" 34)" "$colour" "$(pad_to "$state" 12)"
 }
 
 cli_status() {
@@ -548,20 +551,20 @@ cli_status() {
     mem="$(awk '/MemAvailable/{printf "%.1fG", $2/1048576}' /proc/meminfo)"
     sw="$(awk '/SwapTotal/{t=$2} /SwapFree/{f=$2} END{if (t>0) printf "%dM", (t-f)/1024; else printf "off"}' /proc/meminfo)"
     [ "${INSTALL_CUSTOM_CORE:-0}" = "1" ] && core="custom" || core="stock"
-    line=" $(t cli_mem): ${mem}  ·  $(t cli_sw): ${sw}  ·  $(t cli_core_s): ${core}"
-    printf '│\033[2m%s\033[0m\n' "$line" | sed 's/$/│/'
+    line="$(t cli_mem): ${mem}  ·  $(t cli_sw): ${sw}  ·  $(t cli_core_s): ${core}"
+    printf '│ \033[2m%s\033[0m \033[1;35m│\033[0m\n' "$(pad_to "$line" 50)"
 }
 
 cli_note() { printf '  \033[1;32m✓\033[0m %s\n' "$*"; }
 
-cli_menu() {
-    local c state kind
-    while :; do
-        printf '\n'
-        box_top
-        printf '│ \033[1;35m%s\033[0m\033[2m%s\033[0m \033[1;35m│\033[0m\n' "$(pad_to "pg-node-deploy ${SCRIPT_VERSION}" 48)" "$(pad_to "${LANG_CODE}" 12)"
-        printf '│ \033[2m%s\033[0m \033[1;35m│\033[0m\n' "$(pad_to "$(t cli_title)" 60)"
-        box_sep
+cli_menu_draw() {  # prints one menu frame; sets MENU_LINES
+    local state kind frame
+    frame="$( {
+        printf '┌%s┐\n' "$(printf '─%.0s' $(seq 1 "$MENU_W"))"
+        printf '│ \033[1;35m%s\033[0m\033[2m%s\033[0m \033[1;35m│\033[0m\n' \
+            "$(pad_to "pg-node-deploy ${SCRIPT_VERSION}" 40)" "$(pad_to "${LANG_CODE}" 10)"
+        printf '│ \033[2m%s\033[0m \033[1;35m│\033[0m\n' "$(pad_to "$(t cli_title)" 50)"
+        printf '├%s┤\n' "$(printf '─%.0s' $(seq 1 "$MENU_W"))"
         if [ "${BLOCK_PORN:-0}" = "1" ]; then state="$(t on_off)"; kind=on; else state="$(t off)"; kind=off; fi
         cli_item 1 "$(t cli_dns)" "$state" "$kind"
         if [ "${ENABLE_ZRAM:-0}" = "1" ]; then state="$(t on_off)"; kind=on; else state="$(t off)"; kind=off; fi
@@ -572,55 +575,44 @@ cli_menu() {
         cli_item 4 "$(t cli_bbr)" "$state" "$kind"
         if [ "${INSTALL_CUSTOM_CORE:-0}" = "1" ]; then state="custom"; kind=on; else state="stock"; kind=off; fi
         cli_item 5 "$(t cli_core)" "$state" "$kind"
-        box_sep
+        printf '├%s┤\n' "$(printf '─%.0s' $(seq 1 "$MENU_W"))"
         cli_item 6 "$(t cli_list)" "" push
         cli_item 7 "$(t cli_rm)" "" push
-        box_sep
         cli_item 8 "$(t cli_start)" "" push
         cli_item 0 "$(t cli_exit)" "" exit
-        box_sep
+        printf '├%s┤\n' "$(printf '─%.0s' $(seq 1 "$MENU_W"))"
         cli_status
-        box_bot
+        printf '└%s┘\n' "$(printf '─%.0s' $(seq 1 "$MENU_W"))"
+    } )"
+    printf '%s\n' "$frame"
+    MENU_LINES="$(printf '%s\n' "$frame" | wc -l)"
+}
+
+cli_menu() {
+    local c state first=1
+    MENU_W=52
+    while :; do
+        cli_menu_draw
         printf '\033[1;36m[?]\033[0m %s: ' "$(t cli_pick)"
         read -r c || c=0
         case "$c" in
             1)
                 if [ "${BLOCK_PORN:-0}" = "1" ]; then
                     BLOCK_PORN=0; restore_default_dns || warn "DNS restore failed."
-                    cli_note "$(t cli_dns): $(t off)"
                 else
                     BLOCK_PORN=1; configure_dns || warn "DNS setup failed."
-                    cli_note "$(t cli_dns): $(t on_off)"
                 fi ;;
             2)
-                if [ "${ENABLE_ZRAM:-0}" = "1" ]; then
-                    ENABLE_ZRAM=0; disable_zram; cli_note "$(t cli_zram): $(t off)"
-                else
-                    ENABLE_ZRAM=1; enable_zram || warn "zram setup failed."
-                    cli_note "$(t cli_zram): $(t on_off)"
-                fi ;;
+                if [ "${ENABLE_ZRAM:-0}" = "1" ]; then ENABLE_ZRAM=0; disable_zram
+                else ENABLE_ZRAM=1; enable_zram || warn "zram setup failed."; fi ;;
             3)
-                if [ "${ENABLE_SWAP:-0}" = "1" ]; then
-                    ENABLE_SWAP=0; ok "swap will be skipped at install time."
-                    cli_note "$(t cli_swap): $(t off)"
-                else
-                    ENABLE_SWAP=1; enable_swap || warn "swap setup failed."
-                    cli_note "$(t cli_swap): $(t on_off)"
-                fi ;;
+                if [ "${ENABLE_SWAP:-0}" = "1" ]; then ENABLE_SWAP=0
+                else ENABLE_SWAP=1; enable_swap || warn "swap setup failed."; fi ;;
             4)
-                if [ "${ENABLE_BBR:-1}" = "1" ]; then
-                    ENABLE_BBR=0; warn "BBR will not be applied at install time."
-                    cli_note "$(t cli_bbr): $(t off)"
-                else
-                    ENABLE_BBR=1; enable_bbr_fq || true
-                    cli_note "$(t cli_bbr): $(t on_off)"
-                fi ;;
+                if [ "${ENABLE_BBR:-1}" = "1" ]; then ENABLE_BBR=0
+                else ENABLE_BBR=1; enable_bbr_fq || true; fi ;;
             5)
-                if [ "${INSTALL_CUSTOM_CORE:-0}" = "1" ]; then
-                    INSTALL_CUSTOM_CORE=0; cli_note "$(t cli_core): stock"
-                else
-                    INSTALL_CUSTOM_CORE=1; cli_note "$(t cli_core): custom"
-                fi ;;
+                if [ "${INSTALL_CUSTOM_CORE:-0}" = "1" ]; then INSTALL_CUSTOM_CORE=0; else INSTALL_CUSTOM_CORE=1; fi ;;
             6) list_instances ;;
             7)
                 list_instances
@@ -634,6 +626,10 @@ cli_menu() {
             8) return 0 ;;
             0) exit 0 ;;
             *) warn "1-8 or 0" ;;
+        esac
+        # toggles redraw in place; actions that printed output redraw below
+        case "$c" in
+            1|2|3|4|5) printf '\033[%dA\033[J' "$(( MENU_LINES + 1 ))" ;;
         esac
     done
 }
@@ -1131,7 +1127,7 @@ WORK_DIR="$(mktemp -d /tmp/pg-node-install.XXXXXX)"
 # "start the install".
 # --------------------------------------------------------------------------
 if [ -t 0 ] && [ "$ASSUME_YES" != "1" ] && [ -z "${CLI_MODE:-}" ]; then
-    if ask_yn "$(t mode_q)" y 36; then
+    if ask_yn "$(t mode_q)" y "38;5;51"; then
         CLI_MODE=0
     else
         CLI_MODE=1
@@ -1188,7 +1184,7 @@ fi
 # --------------------------------------------------------------------------
 NODE_NAME_SUFFIX="${NODE_NAME_SUFFIX:-}"
 if [ -z "${NODE_NAME:-}" ] && [ -z "$NODE_NAME_SUFFIX" ] && [ -t 0 ] && [ "$ASSUME_YES" != "1" ]; then
-    printf '\033[1;35m[?]\033[0m ' >&2
+    printf '\033[1;38;5;177m[?]\033[0m ' >&2
     t node_name_q >&2
     printf '\n' >&2
     read -r NODE_NAME_SUFFIX || true
@@ -1202,7 +1198,7 @@ if [ "$ASSUME_YES" = "1" ] && [ -z "${ENABLE_SWAP:-}" ]; then
     ENABLE_SWAP=1
 fi
 if [ -t 0 ] && [ "$ASSUME_YES" != "1" ] && [ -z "${ENABLE_SWAP:-}" ]; then
-    if ask_yn "$(t swap_q "$(swap_size_mb)")" y 34; then
+    if ask_yn "$(t swap_q "$(swap_size_mb)")" y "38;5;33"; then
         ENABLE_SWAP=1
     else
         ENABLE_SWAP=0
@@ -1215,28 +1211,28 @@ fi
 # Extra choices. Interactive: Enter = yes, except the custom core (= no).
 if [ -t 0 ] && [ "$ASSUME_YES" != "1" ]; then
     if [ -z "${ENABLE_ZRAM:-}" ]; then
-        if ask_yn "$(t zram_q)" n 35; then
+        if ask_yn "$(t zram_q)" n "38;5;45"; then
             ENABLE_ZRAM=1
         else
             ENABLE_ZRAM=0
         fi
     fi
     if [ -z "${BLOCK_PORN:-}" ]; then
-        if ask_yn "$(t porn_q)" y 36; then
+        if ask_yn "$(t porn_q)" y 33; then
             BLOCK_PORN=1
         else
             BLOCK_PORN=0
         fi
     fi
     if [ -z "${INSTALL_CUSTOM_CORE:-}" ]; then
-        if ask_yn "$(t core_q)" n 33; then
+        if ask_yn "$(t core_q)" n "38;5;214"; then
             INSTALL_CUSTOM_CORE=1
         else
             INSTALL_CUSTOM_CORE=0
         fi
     fi
     if [ -z "${ENABLE_BBR:-}" ]; then
-        if ask_yn "$(t bbr_q)" y 32; then
+        if ask_yn "$(t bbr_q)" y "38;5;40"; then
             ENABLE_BBR=1
         else
             ENABLE_BBR=0
