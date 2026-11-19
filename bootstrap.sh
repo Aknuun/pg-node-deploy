@@ -22,7 +22,7 @@
 #
 set -Eeuo pipefail
 
-SCRIPT_VERSION="2.5.2"
+SCRIPT_VERSION="2.5.3"
 REPO_SLUG="Aknuun/pg-node-deploy"
 
 usage() {
@@ -95,21 +95,20 @@ PANEL_CONF_FILE="${PANEL_CONF_FILE:-/etc/pg-node-deploy/panel.conf}"
 #   LOCK_RESOLV_CONF=0     -> don't chattr +i (useful on systems where the lock
 #                             breaks later DHCP/systemd-resolved updates)
 LOCK_RESOLV_CONF="${LOCK_RESOLV_CONF:-1}"
-# Questions asked when a terminal is attached (Enter = yes):
-#   ENABLE_SWAP=1       -> create a swap file sized to this server's RAM
-#   ENABLE_ZRAM=1       -> also add compressed swap in RAM
-#   BLOCK_PORN=1        -> use a Family DNS set that filters adult content
-#   INSTALL_CUSTOM_CORE=1 -> install the custom core that ships with this repo
-# Non-interactive runs (--yes / no terminal) enable all of the above.
-BLOCK_PORN="${BLOCK_PORN:-}"
-INSTALL_CUSTOM_CORE="${INSTALL_CUSTOM_CORE:-}"
-# ENABLE_SWAP=1 -> create /swapfile sized from RAM (2G..8G), asked first when a
-# terminal is attached. Non-interactive runs leave swap alone.
-ENABLE_SWAP="${ENABLE_SWAP:-}"
-# ENABLE_BBR=1 -> write /etc/sysctl.d/99-bbr-fq.conf (BBR + fq), applied in Step 3.
-# Asked up front with the other setup questions when a terminal is attached
-# (Enter = yes); non-interactive runs enable it.
-ENABLE_BBR="${ENABLE_BBR:-}"
+# Features - all ON by default; the CLI menu (option "start the install" flow)
+# is where they are switched off, or override them with env vars:
+#   ENABLE_SWAP=1          swap file sized from RAM (2G..8G)
+#   ENABLE_ZRAM=1          compressed swap in RAM
+#   BLOCK_PORN=1           Family DNS that filters adult content
+#   ENABLE_BBR=1           BBR + fq
+#   INSTALL_CUSTOM_CORE=1  custom xray core with the per-user tracker
+BLOCK_PORN="${BLOCK_PORN:-1}"
+INSTALL_CUSTOM_CORE="${INSTALL_CUSTOM_CORE:-1}"
+# ENABLE_SWAP=1 -> create /swapfile sized from RAM (2G..8G); on by default.
+ENABLE_SWAP="${ENABLE_SWAP:-1}"
+# ENABLE_BBR=1 -> write /etc/sysctl.d/99-bbr-fq.conf (BBR + fq), applied in Step 3; on by default.
+ENABLE_BBR="${ENABLE_BBR:-1}"
+ENABLE_ZRAM="${ENABLE_ZRAM:-1}"
 
 # Padding widths are counted in characters, so use a UTF-8 locale even when the
 # server only has the C locale (otherwise ${#text} counts bytes).
@@ -1288,60 +1287,11 @@ if [ -z "${NODE_NAME:-}" ] && [ -z "$NODE_NAME_SUFFIX" ] && [ -t 0 ] && [ "$ASSU
 fi
 
 # --------------------------------------------------------------------------
-# Swap - asked right after the node name (Enter = yes). Sized from RAM (2G..8G).
-# --yes turns it on; there is no prompt in non-interactive runs.
+# Swap - on by default, sized from RAM (2G..8G); the CLI menu can turn it off.
 # --------------------------------------------------------------------------
-if [ "$ASSUME_YES" = "1" ] && [ -z "${ENABLE_SWAP:-}" ]; then
-    ENABLE_SWAP=1
-fi
-if [ -t 0 ] && [ "$ASSUME_YES" != "1" ] && [ -z "${ENABLE_SWAP:-}" ]; then
-    if ask_yn "$(t swap_q "$(swap_size_mb)")" y "38;5;33"; then
-        ENABLE_SWAP=1
-    else
-        ENABLE_SWAP=0
-    fi
-fi
 if [ "${ENABLE_SWAP:-0}" = "1" ]; then
     enable_swap
 fi
-
-# Extra choices. Interactive: Enter = yes for every option (core included).
-if [ -t 0 ] && [ "$ASSUME_YES" != "1" ]; then
-    if [ -z "${ENABLE_ZRAM:-}" ]; then
-        if ask_yn "$(t zram_q)" y "38;5;45"; then
-            ENABLE_ZRAM=1
-        else
-            ENABLE_ZRAM=0
-        fi
-    fi
-    if [ -z "${BLOCK_PORN:-}" ]; then
-        if ask_yn "$(t porn_q)" y 33; then
-            BLOCK_PORN=1
-        else
-            BLOCK_PORN=0
-        fi
-    fi
-    if [ -z "${INSTALL_CUSTOM_CORE:-}" ]; then
-        if ask_yn "$(t core_q)" y "38;5;214"; then
-            INSTALL_CUSTOM_CORE=1
-        else
-            INSTALL_CUSTOM_CORE=0
-        fi
-    fi
-    if [ -z "${ENABLE_BBR:-}" ]; then
-        if ask_yn "$(t bbr_q)" y "38;5;40"; then
-            ENABLE_BBR=1
-        else
-            ENABLE_BBR=0
-        fi
-    fi
-fi
-
-# Non-interactive defaults.
-ENABLE_ZRAM="${ENABLE_ZRAM:-1}"
-BLOCK_PORN="${BLOCK_PORN:-1}"
-INSTALL_CUSTOM_CORE="${INSTALL_CUSTOM_CORE:-1}"
-ENABLE_BBR="${ENABLE_BBR:-1}"
 
 if [ "$ENABLE_ZRAM" = "1" ]; then
     enable_zram
