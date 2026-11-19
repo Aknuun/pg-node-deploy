@@ -22,7 +22,7 @@
 #
 set -Eeuo pipefail
 
-SCRIPT_VERSION="2.5.1"
+SCRIPT_VERSION="2.5.2"
 REPO_SLUG="Aknuun/pg-node-deploy"
 
 usage() {
@@ -615,15 +615,16 @@ cli_menu() {
                 else ENABLE_BBR=1; enable_bbr_fq || true; fi ;;
             5)
                 if [ "${INSTALL_CUSTOM_CORE:-0}" = "1" ]; then INSTALL_CUSTOM_CORE=0; else INSTALL_CUSTOM_CORE=1; fi
-                # Apply to an existing node right away, otherwise the choice
-                # only takes effect on the next install.
-                inst="${INSTANCE:-}"
-                [ -n "$inst" ] || inst="$(find_installed_instance || true)"
-                if [ -n "$inst" ] && [ -f "/opt/${inst}/.env" ]; then
+                # Apply to every installed node right away (instance names can
+                # differ); otherwise the choice only takes effect on a new install.
+                applied=0
+                for env_file in /opt/*/.env; do
+                    [ -f "$env_file" ] || continue
+                    inst="$(basename "$(dirname "$env_file")")"
                     INSTANCE="$inst"
                     if [ "${INSTALL_CUSTOM_CORE}" = "1" ]; then
                         if install_custom_core; then cli_note "custom core applied to ${inst}"
-                        else warn "custom core install failed"; fi
+                        else warn "custom core install failed for ${inst}"; fi
                     else
                         use_stock_core; cli_note "stock core restored for ${inst}"
                     fi
@@ -632,7 +633,9 @@ cli_menu() {
                     else
                         warn "restart '${inst}' manually to load the core."
                     fi
-                fi ;;
+                    applied=$((applied + 1))
+                done
+                [ "$applied" -gt 0 ] || warn "no installed node found; the choice applies on the next install" ;;
             6) list_instances ;;
             7)
                 list_instances
@@ -1171,7 +1174,9 @@ install_custom_core() {
     url="${XRAY_RELEASE_BASE}/${zip}"
     log "Detected CPU arch: $(uname -m) -> ${arch}; downloading ${zip} (${XRAY_VERSION})"
 
-    if command -v curl >/dev/null 2>&1; then
+    if [ -s "$WORK_DIR/${zip}" ]; then
+        log "Reusing the cached archive ${zip}."
+    elif command -v curl >/dev/null 2>&1; then
         robust_download "$url" "$WORK_DIR/${zip}" || die "Failed to download xray core from $url"
     else
         wget --tries=3 --timeout=30 -O "$WORK_DIR/${zip}" "$url" || die "Failed to download xray core from $url"
@@ -1203,18 +1208,6 @@ install_custom_core() {
     sed -i -E "s|^#? *XRAY_EXECUTABLE_PATH *=.*|XRAY_EXECUTABLE_PATH=${dir}/xray|" "$env_file"
     grep -q '^XRAY_EXECUTABLE_PATH=' "$env_file" || echo "XRAY_EXECUTABLE_PATH=${dir}/xray" >> "$env_file"
     ok "XRAY_EXECUTABLE_PATH set to ${dir}/xray"
-}
-
-# First instance that already has an env file (used when the menu applies a
-# core choice before INSTANCE has been resolved).
-find_installed_instance() {
-    local d
-    for d in /opt/*/.env; do
-        [ -f "$d" ] || continue
-        basename "$(dirname "$d")"
-        return 0
-    done
-    return 1
 }
 
 SCRIPT_DIR=""
