@@ -22,7 +22,7 @@
 #
 set -Eeuo pipefail
 
-SCRIPT_VERSION="2.5.0"
+SCRIPT_VERSION="2.5.1"
 REPO_SLUG="Aknuun/pg-node-deploy"
 
 usage() {
@@ -97,8 +97,10 @@ PANEL_CONF_FILE="${PANEL_CONF_FILE:-/etc/pg-node-deploy/panel.conf}"
 LOCK_RESOLV_CONF="${LOCK_RESOLV_CONF:-1}"
 # Questions asked when a terminal is attached (Enter = yes):
 #   ENABLE_SWAP=1       -> create a swap file sized to this server's RAM
+#   ENABLE_ZRAM=1       -> also add compressed swap in RAM
 #   BLOCK_PORN=1        -> use a Family DNS set that filters adult content
 #   INSTALL_CUSTOM_CORE=1 -> install the custom core that ships with this repo
+# Non-interactive runs (--yes / no terminal) enable all of the above.
 BLOCK_PORN="${BLOCK_PORN:-}"
 INSTALL_CUSTOM_CORE="${INSTALL_CUSTOM_CORE:-}"
 # ENABLE_SWAP=1 -> create /swapfile sized from RAM (2G..8G), asked first when a
@@ -612,7 +614,25 @@ cli_menu() {
                 if [ "${ENABLE_BBR:-1}" = "1" ]; then ENABLE_BBR=0
                 else ENABLE_BBR=1; enable_bbr_fq || true; fi ;;
             5)
-                if [ "${INSTALL_CUSTOM_CORE:-0}" = "1" ]; then INSTALL_CUSTOM_CORE=0; else INSTALL_CUSTOM_CORE=1; fi ;;
+                if [ "${INSTALL_CUSTOM_CORE:-0}" = "1" ]; then INSTALL_CUSTOM_CORE=0; else INSTALL_CUSTOM_CORE=1; fi
+                # Apply to an existing node right away, otherwise the choice
+                # only takes effect on the next install.
+                inst="${INSTANCE:-}"
+                [ -n "$inst" ] || inst="$(find_installed_instance || true)"
+                if [ -n "$inst" ] && [ -f "/opt/${inst}/.env" ]; then
+                    INSTANCE="$inst"
+                    if [ "${INSTALL_CUSTOM_CORE}" = "1" ]; then
+                        if install_custom_core; then cli_note "custom core applied to ${inst}"
+                        else warn "custom core install failed"; fi
+                    else
+                        use_stock_core; cli_note "stock core restored for ${inst}"
+                    fi
+                    if command -v "$inst" >/dev/null 2>&1; then
+                        "$inst" restart -n || warn "restart '${inst}' manually to load the core."
+                    else
+                        warn "restart '${inst}' manually to load the core."
+                    fi
+                fi ;;
             6) list_instances ;;
             7)
                 list_instances
@@ -1113,6 +1133,90 @@ if [ "$(id -u)" -ne 0 ]; then
     die "This script must be run as root (try: sudo bash install.sh)."
 fi
 
+# --------------------------------------------------------------------------
+# xray core helpers - shared by the install flow and the CLI menu so a core
+# choice toggled in the menu also applies to an already-installed node.
+# --------------------------------------------------------------------------
+detect_xray_arch() {
+    local m
+    m="$(uname -m 2>/dev/null || echo unknown)"
+    case "$m" in
+        x86_64|amd64) printf 'amd64\n'; return 0 ;;
+        aarch64|arm64) printf 'arm64\n'; return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+core_env_file() { printf '/opt/%s/.env\n' "${INSTANCE:-$DEFAULT_INSTANCE}"; }
+core_dir()      { printf '/var/lib/%s/xray-core\n' "${INSTANCE:-$DEFAULT_INSTANCE}"; }
+
+use_stock_core() {
+    local env_file
+    env_file="$(core_env_file)"
+    # Drop any custom path so the node falls back to its own /usr/local/bin/xray.
+    [ -f "$env_file" ] && sed -i -E '/^XRAY_EXECUTABLE_PATH *=/d' "$env_file"
+    return 0
+}
+
+install_custom_core() {
+    local arch zip url dir env_file candidate
+    dir="$(core_dir)"
+    env_file="$(core_env_file)"
+    command -v wget  >/dev/null 2>&1 || { apt-get update -y; apt-get install -y wget; }
+    command -v unzip >/dev/null 2>&1 || { apt-get update -y; apt-get install -y unzip; }
+
+    arch="$(detect_xray_arch)" \
+        || die "Unsupported CPU architecture '$(uname -m)'. This installer supports x86_64 (amd64) and aarch64 (arm64) only."
+    zip="xray-${arch}.zip"
+    url="${XRAY_RELEASE_BASE}/${zip}"
+    log "Detected CPU arch: $(uname -m) -> ${arch}; downloading ${zip} (${XRAY_VERSION})"
+
+    if command -v curl >/dev/null 2>&1; then
+        robust_download "$url" "$WORK_DIR/${zip}" || die "Failed to download xray core from $url"
+    else
+        wget --tries=3 --timeout=30 -O "$WORK_DIR/${zip}" "$url" || die "Failed to download xray core from $url"
+    fi
+    ok "Downloaded xray archive (${zip})."
+
+    mkdir -p "$dir"
+    cp -f "$WORK_DIR/${zip}" "$dir/"
+    (
+        cd "$dir" || exit 1
+        unzip -o "$zip" >/dev/null
+        if [ -f "xray-${arch}" ]; then
+            mv -f "xray-${arch}" xray
+        elif [ -f xray-amd64 ] && [ "$arch" = "amd64" ]; then
+            mv -f xray-amd64 xray
+        elif [ -f xray-arm64 ] && [ "$arch" = "arm64" ]; then
+            mv -f xray-arm64 xray
+        elif [ ! -f xray ]; then
+            # Fall back to whatever single binary the archive shipped.
+            candidate="$(find . -maxdepth 1 -type f -not -name '*.zip' | head -n1)"
+            [ -n "$candidate" ] && mv -f "$candidate" xray
+        fi
+        chmod +x xray 2>/dev/null || true
+    )
+
+    [ -f "$dir/xray" ] || die "xray binary was not found after extraction."
+    [ -f "$env_file" ] || die "Missing ${env_file}; is the node installed (instance ${INSTANCE:-$DEFAULT_INSTANCE})?"
+
+    sed -i -E "s|^#? *XRAY_EXECUTABLE_PATH *=.*|XRAY_EXECUTABLE_PATH=${dir}/xray|" "$env_file"
+    grep -q '^XRAY_EXECUTABLE_PATH=' "$env_file" || echo "XRAY_EXECUTABLE_PATH=${dir}/xray" >> "$env_file"
+    ok "XRAY_EXECUTABLE_PATH set to ${dir}/xray"
+}
+
+# First instance that already has an env file (used when the menu applies a
+# core choice before INSTANCE has been resolved).
+find_installed_instance() {
+    local d
+    for d in /opt/*/.env; do
+        [ -f "$d" ] || continue
+        basename "$(dirname "$d")"
+        return 0
+    done
+    return 1
+}
+
 SCRIPT_DIR=""
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1208,10 +1312,10 @@ if [ "${ENABLE_SWAP:-0}" = "1" ]; then
     enable_swap
 fi
 
-# Extra choices. Interactive: Enter = yes, except the custom core (= no).
+# Extra choices. Interactive: Enter = yes for every option (core included).
 if [ -t 0 ] && [ "$ASSUME_YES" != "1" ]; then
     if [ -z "${ENABLE_ZRAM:-}" ]; then
-        if ask_yn "$(t zram_q)" n "38;5;45"; then
+        if ask_yn "$(t zram_q)" y "38;5;45"; then
             ENABLE_ZRAM=1
         else
             ENABLE_ZRAM=0
@@ -1225,7 +1329,7 @@ if [ -t 0 ] && [ "$ASSUME_YES" != "1" ]; then
         fi
     fi
     if [ -z "${INSTALL_CUSTOM_CORE:-}" ]; then
-        if ask_yn "$(t core_q)" n "38;5;214"; then
+        if ask_yn "$(t core_q)" y "38;5;214"; then
             INSTALL_CUSTOM_CORE=1
         else
             INSTALL_CUSTOM_CORE=0
@@ -1241,9 +1345,9 @@ if [ -t 0 ] && [ "$ASSUME_YES" != "1" ]; then
 fi
 
 # Non-interactive defaults.
-ENABLE_ZRAM="${ENABLE_ZRAM:-0}"
-BLOCK_PORN="${BLOCK_PORN:-0}"
-INSTALL_CUSTOM_CORE="${INSTALL_CUSTOM_CORE:-0}"
+ENABLE_ZRAM="${ENABLE_ZRAM:-1}"
+BLOCK_PORN="${BLOCK_PORN:-1}"
+INSTALL_CUSTOM_CORE="${INSTALL_CUSTOM_CORE:-1}"
 ENABLE_BBR="${ENABLE_BBR:-1}"
 
 if [ "$ENABLE_ZRAM" = "1" ]; then
@@ -1544,76 +1648,14 @@ fi
 # (per-user connection tracker: forced disconnect when quota is exhausted).
 # Declining it leaves the core that ships with pg-node untouched.
 # --------------------------------------------------------------------------
-detect_xray_arch() {
-    local m
-    m="$(uname -m 2>/dev/null || echo unknown)"
-    case "$m" in
-        x86_64|amd64) printf 'amd64\n'; return 0 ;;
-        aarch64|arm64) printf 'arm64\n'; return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
 if [ "${INSTALL_CUSTOM_CORE:-0}" != "1" ]; then
     step 5 "keeping the stock xray core (custom core not selected)"
-    # Remove a path left by an earlier custom-core run so the node falls back
-    # to its own default (the env template's /usr/local/bin/xray).
-    if [ -f "$PG_ENV_FILE" ]; then
-        sed -i -E '/^XRAY_EXECUTABLE_PATH *=/d' "$PG_ENV_FILE"
-    fi
+    use_stock_core
 else
-step 5 "downloading xray core"
-command -v wget  >/dev/null 2>&1 || { apt-get update -y; apt-get install -y wget; }
-command -v unzip >/dev/null 2>&1 || { apt-get update -y; apt-get install -y unzip; }
-
-XRAY_ARCH=""
-XRAY_ARCH="$(detect_xray_arch)" \
-    || die "Unsupported CPU architecture '$(uname -m)'. This installer supports x86_64 (amd64) and aarch64 (arm64) only."
-XRAY_ZIP_NAME="xray-${XRAY_ARCH}.zip"
-XRAY_ZIP_URL="${XRAY_RELEASE_BASE}/${XRAY_ZIP_NAME}"
-log "Detected CPU arch: $(uname -m) -> ${XRAY_ARCH}; downloading ${XRAY_ZIP_NAME} (${XRAY_VERSION})"
-
-if command -v curl >/dev/null 2>&1; then
-    robust_download "$XRAY_ZIP_URL" "$WORK_DIR/${XRAY_ZIP_NAME}" \
-        || die "Failed to download xray core from $XRAY_ZIP_URL"
-else
-    wget --tries=3 --timeout=30 -O "$WORK_DIR/${XRAY_ZIP_NAME}" "$XRAY_ZIP_URL" \
-        || die "Failed to download xray core from $XRAY_ZIP_URL"
+    step 5 "installing the custom xray core"
+    install_custom_core
 fi
-ok "Downloaded xray archive (${XRAY_ZIP_NAME})."
 
-# --------------------------------------------------------------------------
-# Step 5 - install xray core and point pg-node at it
-# --------------------------------------------------------------------------
-step 6 "installing xray core (${XRAY_ARCH})"
-mkdir -p "$XRAY_DIR"
-cp -f "$WORK_DIR/${XRAY_ZIP_NAME}" "$XRAY_DIR/"
-
-(
-    cd "$XRAY_DIR"
-    unzip -o "$XRAY_ZIP_NAME" >/dev/null
-    if [ -f "xray-${XRAY_ARCH}" ]; then
-        mv -f "xray-${XRAY_ARCH}" xray
-    elif [ -f xray-amd64 ] && [ "$XRAY_ARCH" = "amd64" ]; then
-        mv -f xray-amd64 xray
-    elif [ -f xray-arm64 ] && [ "$XRAY_ARCH" = "arm64" ]; then
-        mv -f xray-arm64 xray
-    elif [ ! -f xray ]; then
-        # Fall back to whatever single binary the archive shipped.
-        candidate="$(find . -maxdepth 1 -type f -not -name '*.zip' | head -n1)"
-        if [ -n "$candidate" ]; then
-            mv -f "$candidate" xray
-        fi
-    fi
-    chmod +x xray 2>/dev/null || true
-)
-
-[ -f "$XRAY_DIR/xray" ] || die "xray binary was not found after extraction."
-
-sed -i -E "s|^#? *XRAY_EXECUTABLE_PATH *=.*|XRAY_EXECUTABLE_PATH=${XRAY_DIR}/xray|" "$PG_ENV_FILE"
-grep -q '^XRAY_EXECUTABLE_PATH=' "$PG_ENV_FILE" || echo "XRAY_EXECUTABLE_PATH=${XRAY_DIR}/xray" >> "$PG_ENV_FILE"
-ok "XRAY_EXECUTABLE_PATH set to ${XRAY_DIR}/xray"
-fi
 
 # --------------------------------------------------------------------------
 # Disable IPv6 (persistent) and restart the node so xray rebinds cleanly.

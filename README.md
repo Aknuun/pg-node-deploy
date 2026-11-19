@@ -12,8 +12,8 @@
 - نصب خودکار `pg-node` + هسته سفارشی Xray و نصب `nload`
 - افزودن خودکار نود به پنل با نام `<IP>-<4حرف-اول-هاست>-<دیتاسنتر>` (مثلاً `178.104.242.27-nure-hetzner`) و چند instance روی یک سرور
 - نگه‌داشتن پورت/API Key/گواهی در نصب مجدد، و انتخاب پورت آزاد در نصب تازه
-- **هسته پیش‌فرض استوک Xray است** (بدون رشد رم)؛ اگر هسته اختصاصی این پروژه را خواستی، در سؤال «هسته سفارشی» بله بزن یا `INSTALL_CUSTOM_CORE=1` بده (آن هسته مصرف حجم را دقیق کنترل می‌کند و با تمام‌شدن حجم، کانفیگ سریع قطع می‌شود)
-- پرسش **zram** (سواپ فشرده در رم) با پیش‌فرض خیر؛ اگر ماژول نبود خودش `linux-modules-extra` را نصب می‌کند
+- **هسته پیش‌فرض، هسته اختصاصی این پروژه است** (کنترل دقیق مصرف حجم و قطع سریع کانفیگ با تمام‌شدن حجم)؛ با زدن اینتر همان نصب می‌شود. اگر هسته استوک Xray را می‌خواهی، در سؤال مربوطه `n` بزن یا `INSTALL_CUSTOM_CORE=0` بده
+- پرسش **zram** (سواپ فشرده در رم) با پیش‌فرض بله؛ اگر ماژول نبود خودش `linux-modules-extra` را نصب می‌کند
 - بعد از نصب یک **health check** می‌زند: پورت gRPC/API، پروسه xray، بالا بودن کانتینر، فایل env، رم آزاد، سواپ و lost-retransmit
 - **محدودکردن لاگ‌ها**: سقف journald (200M) و logrotate برای لاگ‌های نود/xray، تا دیسک پر نشود
 - فلگ‌های خط فرمان: `--yes` (بدون پرسش)، `--repair`، `--uninstall`، `--help`، `--version`
@@ -153,8 +153,8 @@ Automated PasarGuard `pg-node` + custom Xray installer that also **registers the
 - If `pg-node` is already installed, it asks for Enter (reinstall) or a new instance name.
 - Uses random free ports when 62050/62051 are busy (fresh installs only).
 - Reinstalling an existing instance stops its services first and keeps the existing ports, API key and certificate, so the panel entry stays valid.
-- **Default core is the stock Xray** (no memory creep); the project's custom core (accurate volume tracking, cuts the config as soon as the quota is exhausted) is opt-in via the "custom core" question or `INSTALL_CUSTOM_CORE=1`.
-- Also asks up front about **zram** (compressed swap in RAM), default **no**; it installs `linux-modules-extra` when the module is missing.
+- **Default core is the project's custom core** (accurate volume tracking, cuts the config as soon as the quota is exhausted); pressing Enter installs it. Pass `INSTALL_CUSTOM_CORE=0` for the stock Xray core.
+- Also asks up front about **zram** (compressed swap in RAM), default **yes**; it installs `linux-modules-extra` when the module is missing.
 - Ends with a **health check**: gRPC/API ports, xray process, container up, env file, free RAM, swap use and lost retransmits.
 - **Caps logs**: journald limit (200M) + logrotate for node/xray logs so the disk cannot fill.
 - CLI flags: `--yes` (no questions), `--repair`, `--uninstall`, `--help`, `--version`.
@@ -163,7 +163,7 @@ Automated PasarGuard `pg-node` + custom Xray installer that also **registers the
 - The **first question** is \"start the install directly?\" — answering `n` opens a coloured **CLI menu** (each option shows its state with a green ● or a grey ○, and the footer prints free RAM, swap usage and core type) where you can toggle the filtered DNS, zram, swap, BBR and the xray core type (applied immediately where it makes sense), list installed nodes, remove one, and then start the install
 - It asks up front (right after the node name) whether to create a **swap file sized to the server's RAM** — **Enter = yes** (equal to RAM, min 2G, max 8G, saved in `/etc/fstab`); `ENABLE_SWAP=0` skips it
 - It asks up front (with the other setup questions) whether to enable **BBR + fq** (kernel tuning for lossy/high-latency links) — **Enter = yes**, applied in Step 3; `ENABLE_BBR=0` skips it.
-- Interactive run asks, besides the node name: block adult content with a filtered (Family) DNS? (default **yes**) and install the custom Xray core? (default **no**). `BLOCK_PORN=0` removes a previously applied filtered DNS and restores the server default (systemd-resolved stub, 127.0.0.53); `INSTALL_CUSTOM_CORE=0` installs the official XTLS release instead of the custom core.
+- Interactive run asks, besides the node name: block adult content with a filtered (Family) DNS? (default **yes**) and install the custom Xray core? (default **yes**). `BLOCK_PORN=0` removes a previously applied filtered DNS and restores the server default (systemd-resolved stub, 127.0.0.53); `INSTALL_CUSTOM_CORE=0` installs the official XTLS release instead of the custom core.
 
 **Method 1 — env vars (one run):**
 
