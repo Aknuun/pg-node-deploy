@@ -22,7 +22,7 @@
 #
 set -Eeuo pipefail
 
-SCRIPT_VERSION="2.5.3"
+SCRIPT_VERSION="2.5.4"
 REPO_SLUG="Aknuun/pg-node-deploy"
 
 usage() {
@@ -958,11 +958,23 @@ tune_sysctl() {
 net.ipv4.tcp_mem = 65536 131072 262144
 vm.swappiness = 10
 fs.file-max = 1048576
+# Mobile users drop off the network without a FIN/RST, so the kernel keeps the
+# socket ESTABLISHED and xray keeps its buffers. The 2 hour default made dead
+# sessions pile up (a node showed 6251 sessions for 3629 users). Probe after
+# 2 minutes and give up after ~3.5, so a dead session is reclaimed in minutes.
+net.ipv4.tcp_keepalive_time = 120
+net.ipv4.tcp_keepalive_intvl = 30
+net.ipv4.tcp_keepalive_probes = 4
+net.ipv4.tcp_fin_timeout = 15
+# Accept bursts and keep enough ephemeral ports for thousands of forwarded flows.
+net.core.somaxconn = 32768
+net.ipv4.tcp_max_syn_backlog = 16384
+net.ipv4.ip_local_port_range = 1024 65535
 EOF
     sysctl --system >/dev/null 2>&1 \
         || sysctl -p "$NODE_TUNING_CONF" >/dev/null 2>&1 \
         || warn "Could not apply ${NODE_TUNING_CONF}."
-    ok "sysctl tuning written to ${NODE_TUNING_CONF} (tcp_mem, swappiness=10, file-max=1048576)."
+    ok "sysctl tuning written to ${NODE_TUNING_CONF} (tcp_mem, swappiness=10, file-max, tcp keepalive 120/30/4, somaxconn, port range)."
 }
 
 # --------------------------------------------------------------------------
